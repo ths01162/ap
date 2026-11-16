@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="referrer" content="no-referrer" />
+  <title>ALPHA PULSE PRO — KRX 1,250+ 데이트레이딩 주가흐름 종목 탐색기</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Pretendard:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 상단 마켓 요약 및 컨트롤 헤더 -->
+  <header class="top-header">
+    <div class="brand-area">
+      <div class="brand-logo">
+        <span class="pulse-dot"></span>
+        <span class="brand-title">ALPHA PULSE <span class="pro-badge">KRX 1,379 실세</span></span>
+      </div>
+      <span class="brand-subtitle" id="brandSnapshotSubtitle">KRX 현재가·거래대금 동기화</span>
+    </div>
+
+    <div class="market-kpi-bar">
+      <div class="kpi-item">
+        <span class="kpi-label">전체 모집단</span>
+        <span class="kpi-val mono" id="kpiTotalUniverse">1,379종목</span>
+      </div>
+      <div class="kpi-item">
+        <span class="kpi-label">전략 포착</span>
+        <span class="kpi-val mono highlight-cyan" id="kpiMatchedCount">0종목</span>
+      </div>
+      <div class="kpi-item">
+        <span class="kpi-label">RVOL 2x+ 급증</span>
+        <span class="kpi-val mono up-color" id="kpiRvolSurge">0종목</span>
+      </div>
+      <div class="kpi-item">
+        <span class="kpi-label">ORB/고가 돌파</span>
+        <span class="kpi-val mono up-color" id="kpiBreakoutCount">0종목</span>
+      </div>
+      <div class="kpi-item">
+        <span class="kpi-label">주도 섹터</span>
+        <span class="kpi-val highlight-gold" id="kpiTopSector">-</span>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <div class="sim-control-group">
+        <button id="btnResetRealPrice" class="btn-secondary" title="전체 1,381종목 실시간 KRX 시세를 지금 즉시 강제 동기화">
+          🔄 전체시세 즉시갱신
+        </button>
+        <button id="btnToggleLive" class="btn-live active" title="KRX/네이버 금융 실시간 시세 자동 스트리밍 ON/OFF">
+          <span class="live-indicator"></span>
+          <span id="liveStatusText">KRX 실시간 연동중</span>
+        </button>
+        <select id="selectSimSpeed" class="select-compact" title="실시간 시세 갱신 주기">
+          <option value="1200">1.2초</option>
+          <option value="2000" selected>2.0초</option>
+          <option value="3500">3.5초</option>
+        </select>
+        <select id="selectMarketScenario" class="select-compact" title="실시간 연동 / 시뮬레이션 모드">
+          <option value="REAL_SNAPSHOT" selected>KRX 실시간 시세 (LIVE)</option>
+          <option value="MORNING_BREAKOUT">장초반 돌파 시뮬</option>
+          <option value="PULLBACK_FOCUS">눌림목 반등 시뮬</option>
+        </select>
+      </div>
+      <button id="btnOpenImportModal" class="btn-secondary">CSV/JSON 연동</button>
+      <button id="btnExportCsv" class="btn-secondary">CSV 저장</button>
+    </div>
+  </header>
+
+  <!-- 실시간 급등/돌파 시그널 티커 바 -->
+  <section class="live-alert-bar">
+    <div class="alert-bar-label">
+      <span class="radar-icon">⚡</span> 실시간 돌파 포착
+    </div>
+    <div class="alert-ticker-track" id="liveAlertTrack">
+      <!-- 실시간 돌파 알림 아이템 렌더링 -->
+    </div>
+  </section>
+
+  <!-- 메인 3단 워크스페이스 -->
+  <main class="workspace-grid">
+    <!-- 좌측: 데이트레이딩 전략 프리셋 & 멀티 팩터 정밀 필터 -->
+    <aside class="panel left-panel">
+      <!-- 모바일 전용 좌측 패널 서브탭 (원클릭 전환으로 세로 스크롤 제거) -->
+      <div class="mobile-subtabs mobile-left-subtabs" id="mLeftSubtabs">
+        <button class="m-subtab-pill active" data-ltab="presets">🎯 전략</button>
+        <button class="m-subtab-pill" data-ltab="filters">⚙️ 필터</button>
+        <button class="m-subtab-pill" data-ltab="sectors">🔥 섹터</button>
+      </div>
+
+      <div class="panel-section" id="sectionPresets">
+        <div class="section-header">
+          <h2>🎯 데이트레이딩 전략 프리셋</h2>
+          <span class="badge-subtle">원클릭 스캔</span>
+        </div>
+        <div class="preset-list" id="strategyPresetList">
+          <button class="preset-card next-day-card" data-preset="NEXT_DAY_CANDIDATE">
+            <div class="preset-top">
+              <span class="preset-title">🌙 내일 공략 후보 (종가·시초가)</span>
+              <span class="preset-tag nextday">익일선별</span>
+            </div>
+            <p class="preset-desc">거래대금 100억+ &amp; RVOL 1.4x+ &amp; 고가 부근 장악형 양봉 마감 주도주</p>
+          </button>
+
+          <button class="preset-card active" data-preset="RVOL_ORB_BREAKOUT">
+            <div class="preset-top">
+              <span class="preset-title">🔥 거래량 급증 + 변동성 돌파</span>
+              <span class="preset-tag hot">추천 코어</span>
+            </div>
+            <p class="preset-desc">RVOL ≥ 1.8x &amp; ORB(장초반 고점)/래리 목표가 돌파 + VWAP 상단 강세 종목</p>
+          </button>
+
+          <button class="preset-card" data-preset="PREV_HIGH_SURGE">
+            <div class="preset-top">
+              <span class="preset-title">🚀 전일고가 돌파 + 수급폭발</span>
+              <span class="preset-tag breakout">돌파매매</span>
+            </div>
+            <p class="preset-desc">전일 고점 돌파 &amp; 체결강도 115%+ &amp; 당일 고가 부근 장악형 양봉</p>
+          </button>
+
+          <button class="preset-card" data-preset="VWAP_TREND_LEADER">
+            <div class="preset-top">
+              <span class="preset-title">📈 VWAP 지지 + 정배열 추세</span>
+              <span class="preset-tag trend">추세추종</span>
+            </div>
+            <p class="preset-desc">현재가 &gt; VWAP &amp; 5분봉 MA5 &gt; MA20 정배열, 기관/외인 수급 패턴</p>
+          </button>
+
+          <button class="preset-card" data-preset="VWAP_PULLBACK_BOUNCE">
+            <div class="preset-top">
+              <span class="preset-title">💎 급등 후 VWAP 눌림목 반등</span>
+              <span class="preset-tag dip">눌림타점</span>
+            </div>
+            <p class="preset-desc">장중 강세 후 VWAP ±1.6% 이내 조정 지지 후 재차 양봉 반등 턴어라운드</p>
+          </button>
+
+          <button class="preset-card" data-preset="ALL_UNIVERSE">
+            <div class="preset-top">
+              <span class="preset-title">🌐 KRX 전체 1,379종목</span>
+              <span class="preset-tag all">전체시세</span>
+            </div>
+            <p class="preset-desc">필터 제약 없이 1,379개 전체 상장종목의 KRX 실제 현재가·등락률·거래대금 확인</p>
+          </button>
+        </div>
+      </div>
+
+      <!-- 세부 조건 커스텀 필터 -->
+      <div class="panel-section filter-controls-section" id="sectionFilters">
+        <div class="section-header">
+          <h2>⚙️ 세부 수급/주가흐름 필터</h2>
+          <button id="btnResetFilters" class="btn-link">초기화</button>
+        </div>
+
+        <div class="filter-group">
+          <label class="filter-label">시장 및 섹터 선택</label>
+          <div class="market-tabs" id="marketFilterTabs">
+            <button class="tab-btn active" data-market="ALL">전체 (1,379)</button>
+            <button class="tab-btn" data-market="KOSPI">KOSPI</button>
+            <button class="tab-btn" data-market="KOSDAQ">KOSDAQ</button>
+            <button class="tab-btn" data-market="WATCHLIST">★ 관심종목</button>
+          </div>
+          <select id="selectSectorFilter" class="input-select mt-6">
+            <option value="ALL">전체 섹터 (15개 업종)</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <div class="slider-header">
+            <span>최소 상대거래량 (RVOL)</span>
+            <strong class="mono highlight-cyan" id="valMinRvol">1.8x 이상</strong>
+          </div>
+          <input type="range" id="rangeMinRvol" min="0.5" max="4.5" step="0.1" value="1.8" />
+        </div>
+
+        <div class="filter-group">
+          <div class="slider-header">
+            <span>등락률 범위 (%)</span>
+            <strong class="mono up-color" id="valChangeRange">+1.5% ~ +28.0%</strong>
+          </div>
+          <div class="dual-number-row">
+            <div class="num-input-box">
+              <span>최소 %</span>
+              <input type="number" id="inputMinChange" value="1.5" step="0.5" min="-29" max="29" />
+            </div>
+            <div class="num-input-box">
+              <span>최대 %</span>
+              <input type="number" id="inputMaxChange" value="28.0" step="0.5" min="-29" max="30" />
+            </div>
+          </div>
+        </div>
+
+        <div class="filter-group">
+          <div class="slider-header">
+            <span>최소 체결강도 (%)</span>
+            <strong class="mono" id="valMinVolPower">105% 이상</strong>
+          </div>
+          <input type="range" id="rangeMinVolPower" min="50" max="180" step="5" value="105" />
+        </div>
+
+        <div class="filter-group">
+          <div class="slider-header">
+            <span>최소 AI 데이트레이딩 점수</span>
+            <strong class="mono highlight-gold" id="valMinScore">70점 이상</strong>
+          </div>
+          <input type="range" id="rangeMinScore" min="0" max="90" step="5" value="70" />
+        </div>
+
+        <div class="filter-group checkbox-grid">
+          <label class="check-item">
+            <input type="checkbox" id="chkAboveVwap" checked />
+            <span>현재가 ≥ VWAP (평균단가 위)</span>
+          </label>
+          <label class="check-item">
+            <input type="checkbox" id="chkOrbBreakout" checked />
+            <span>ORB / 변동성 목표가 돌파</span>
+          </label>
+          <label class="check-item">
+            <input type="checkbox" id="chkPrevHighBreak" />
+            <span>전일 고가 돌파만 보기</span>
+          </label>
+          <label class="check-item">
+            <input type="checkbox" id="chkMaAligned" />
+            <span>5분봉 이평선 정배열 (MA5&gt;MA20)</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- 섹터별 실시간 자금 유입 현황 -->
+      <div class="panel-section sector-rank-section" id="sectionSectors">
+        <div class="section-header">
+          <h2>🔥 섹터별 수급/돌파 순위</h2>
+          <span class="badge-subtle">클릭 시 필터</span>
+        </div>
+        <div class="sector-mini-list" id="sectorHeatmapList">
+          <!-- 섹터별 등락률/RVOL 바 렌더링 -->
+        </div>
+      </div>
+      <button id="btnMobileApplyAndSeeScanner" class="btn-mobile-apply-scanner">🔍 스캐너 결과 보기</button>
+    </aside>
+
+    <!-- 중앙: 실시간 주가흐름 종목 스캐너 테이블 -->
+    <section class="panel center-panel">
+      <div class="scanner-toolbar">
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input
+            type="text"
+            id="inputStockSearch"
+            placeholder="종목명, 종목코드(6자리), 섹터 검색 (예: 삼성, 반도체, 005930)..."
+          />
+          <button id="btnClearSearch" class="btn-clear-search" title="검색어 지우기">✕</button>
+        </div>
+
+        <div class="toolbar-stats">
+          <span>탐색 결과 <strong id="scannerResultCount" class="highlight-cyan">0</strong> / <span id="scannerTotalCount">1,250</span>종목</span>
+          <span class="divider">|</span>
+          <label class="page-size-label">
+            표시 개수
+            <select id="selectPageLimit" class="select-compact">
+              <option value="100">상위 100개</option>
+              <option value="300">상위 300개</option>
+              <option value="600">상위 600개</option>
+              <option value="1500" selected>전체 표시 (1,250+)</option>
+            </select>
+          </label>
+          <div class="m-view-toggle-wrap">
+            <button id="btnToggleMobileTableView" class="btn-m-view-toggle" title="모바일 뷰 전환 (간편 카드 vs 전체 표)">
+              <span class="m-view-icon">📱</span> <span class="m-view-text">간편 뷰</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 장마감 시 익일 공략 후보 안내 배너 -->
+      <div class="market-closed-banner" id="marketClosedBanner" style="display: none;">
+        <span class="banner-icon">🌙</span>
+        <div class="banner-text">
+          <div class="banner-title-line"><strong>[장마감 모드] 내일 들어갈 공략 후보 종목</strong> — 거래대금 주도주 · 고가 부근 장악형 양봉 · 익일 시초가 변동성 돌파 타점</div>
+          <div class="banner-us-bar" id="bannerUsBar"></div>
+        </div>
+        <div class="banner-actions">
+          <button id="btnSortByUsGap" class="banner-btn" title="미 증시 연동 익일 예상 갭상승률 순으로 정렬">🇺🇸 US예상순 정렬</button>
+          <button id="btnBannerPresetToggle" class="banner-btn">전체 종목 보기</button>
+        </div>
+      </div>
+
+      <div class="table-container" id="scannerTableContainer">
+        <table class="scanner-table">
+          <thead>
+            <tr>
+              <th class="col-watch text-center" title="관심종목">★</th>
+              <th class="col-name sortable" data-sort="name">종목명 / 코드 <span class="sort-arrow"></span></th>
+              <th class="col-price sortable text-right" data-sort="price">현재가 <span class="sort-arrow"></span></th>
+              <th class="col-chg sortable text-right" data-sort="changePct">등락률 <span class="sort-arrow"></span></th>
+              <th class="col-rvol sortable text-right" data-sort="rvol" title="평소 동시간대 대비 상대거래량 배수">RVOL <span class="sort-arrow"></span></th>
+              <th class="col-vp sortable text-right" data-sort="volPower">체결강도 <span class="sort-arrow"></span></th>
+              <th class="col-vwap sortable text-right" data-sort="vwapDiffPct" title="당일 거래량가중평균가(VWAP) 대비 괴리율">VWAP괴리 <span class="sort-arrow"></span></th>
+              <th class="col-tv sortable text-right" data-sort="turnoverEok">거래대금 <span class="sort-arrow"></span></th>
+              <th class="col-spark text-center">5분봉 흐름</th>
+              <th class="col-signals sortable text-center" data-sort="usGap" id="thColSignals" title="미 증시 연동 익일 예상 갭 등락률 순 정렬">포착 시그널 <span class="sort-arrow"></span></th>
+              <th class="col-score sortable text-center active-sort" data-sort="score">AI타점 <span class="sort-arrow">▼</span></th>
+            </tr>
+          </thead>
+          <tbody id="scannerTableBody">
+            <!-- JS로 고속 렌더링 -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 우측: 선택 종목 인트라데이 캔들+VWAP+ORB 차트 & 데이트레이딩 타점 시뮬레이터 -->
+    <aside class="panel right-panel">
+      <div class="detail-header" id="detailStockHeader">
+        <div class="detail-title-row">
+          <button id="btnMobileBackToScanner" class="btn-mobile-back" title="스캐너 목록으로 돌아가기">◀ 목록</button>
+          <div class="detail-stock-identity">
+            <div class="detail-badges-row">
+              <span class="market-badge" id="detailMarketBadge">KOSPI</span>
+              <span class="nxt-badge" id="detailNxtBadge" style="display:none;">NXT</span>
+              <span class="sector-badge" id="detailSectorBadge">반도체/장비</span>
+            </div>
+            <div class="detail-name-row">
+              <h2 class="detail-name" id="detailStockName">한미반도체</h2>
+              <span class="detail-code mono" id="detailStockCode">042700</span>
+            </div>
+          </div>
+          <div class="detail-price-box">
+            <div class="detail-price mono" id="detailStockPrice">118,500원</div>
+            <div class="detail-change mono" id="detailStockChange">▲ 6,400 (+5.71%)</div>
+          </div>
+        </div>
+
+        <!-- 통합 거래대금 & 누적 거래량 전용 한 줄 서브 바 -->
+        <div class="detail-tv-bar mono" id="detailTvLine">
+          <span>거래대금 <strong class="tv-highlight">0억</strong></span>
+          <span style="color:#64748b;">|</span>
+          <span>누적 <strong class="tv-highlight">0주</strong></span>
+        </div>
+
+        <div class="detail-signal-badges" id="detailSignalBadges"></div>
+      </div>
+
+      <!-- 모바일 전용 우측 패널 서브탭 (원클릭 전환으로 세로 스크롤 제거) -->
+      <div class="mobile-subtabs mobile-right-subtabs" id="mRightSubtabs">
+        <button class="m-subtab-pill active" data-rtab="us-predict" id="mTabUsPredict">🇺🇸 시초예측</button>
+        <button class="m-subtab-pill" data-rtab="chart" id="mTabChart">📊 5분차트</button>
+        <button class="m-subtab-pill" data-rtab="plan" id="mTabPlan">🧭 타점·전략</button>
+        <button class="m-subtab-pill" data-rtab="all" id="mTabAll">📋 전체</button>
+      </div>
+
+      <!-- 캔버스 기반 장중 5분봉 + VWAP + ORB + 거래량 차트 -->
+      <div class="chart-card">
+        <div class="chart-toolbar">
+          <span class="chart-title">📊 5분봉 &amp; 핵심선</span>
+          <div class="chart-legend">
+            <span class="legend-item"><i class="dot-vwap"></i>VWAP</span>
+            <span class="legend-item"><i class="dot-orb"></i>ORB고점</span>
+            <span class="legend-item"><i class="dot-prevhigh"></i>전일고가</span>
+            <span class="legend-item"><i class="dot-ma5"></i>MA5</span>
+          </div>
+        </div>
+        <div class="canvas-wrapper">
+          <canvas id="intradayChartCanvas" width="420" height="270"></canvas>
+        </div>
+      </div>
+
+      <!-- 핵심 기술적 지표 8종 요약 그리드 -->
+      <div class="metrics-grid">
+        <div class="metric-box">
+          <span class="m-label">당일 거래대금</span>
+          <strong class="m-val mono highlight-cyan" id="detailTurnover">0억</strong>
+        </div>
+        <div class="metric-box">
+          <span class="m-label">누적 거래량</span>
+          <strong class="m-val mono" id="detailVolume">0주</strong>
+        </div>
+        <div class="metric-box">
+          <span class="m-label">RVOL (상대거래량)</span>
+          <strong class="m-val mono" id="detailRvol">2.85x</strong>
+        </div>
+        <div class="metric-box">
+          <span class="m-label">실시간 체결강도</span>
+          <strong class="m-val mono" id="detailVolPower">142.5%</strong>
+        </div>
+        <div class="metric-box">
+          <span class="m-label">VWAP (거래량가중가)</span>
+          <strong class="m-val mono" id="detailVwap">115,200원</strong>
+        </div>
+        <div class="metric-box">
+          <span class="m-label">ORB 30분 고점</span>
+          <strong class="m-val mono" id="detailOrbHigh">116,000원</strong>
+        </div>
+        <div class="metric-box">
+          <span class="m-label">변동성 돌파 목표가</span>
+          <strong class="m-val mono" id="detailLarryTarget">115,800원</strong>
+        </div>
+        <div class="metric-box">
+          <span class="m-label">RSI(14) / 시초갭</span>
+          <strong class="m-val mono" id="detailRsiGap">68 / +1.8%</strong>
+        </div>
+      </div>
+
+      <!-- 🇺🇸 미 증시 연동 익일 시초가 예측 시스템 (장마감 특화) -->
+      <div class="us-prediction-card" id="usPredictionCard">
+        <div class="section-header">
+          <div class="us-card-title-group">
+            <h2 id="usPredCardTitle">🇺🇸 미 연동 시초가 예측</h2>
+            <span class="us-session-badge" id="usSessionBadge">본장 LIVE</span>
+          </div>
+          <button class="btn-refresh-us" id="btnRefreshUsMarket" title="미국 실시간 시세 동기화">🔄 동기화</button>
+        </div>
+
+        <!-- 연동 미국 핵심 자산 정보 -->
+        <div class="us-driver-banner" id="usDriverBanner">
+          <div class="driver-item main">
+            <div class="d-top">
+              <div class="d-top-label-wrap">
+                <span class="d-role-tag">1순위 연동</span>
+                <strong class="d-name" id="usPrimaryName">엔비디아 (NVDA)</strong>
+              </div>
+              <span class="d-beta mono" id="usPrimaryBeta">β 1.25</span>
+            </div>
+            <div class="d-prices-line mono">
+              <span class="d-val" id="usPrimaryPrice">$162.85</span>
+              <span class="d-chg down-color" id="usPrimaryChg">-2.01%</span>
+            </div>
+          </div>
+          <div class="driver-sub-grid">
+            <div class="driver-item sub">
+              <span class="d-role">업종 ETF</span>
+              <div class="d-sub-body mono">
+                <span id="usSecondaryName">SOXX 반도체</span>
+                <strong class="down-color" id="usSecondaryChg">-4.17%</strong>
+              </div>
+            </div>
+            <div class="driver-item sub">
+              <span class="d-role">야간 한국물</span>
+              <div class="d-sub-body mono">
+                <span>EWY (한국ETF)</span>
+                <strong class="down-color" id="usEwyChg">-3.26%</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 익일 예상 시초가 메인 하이라이트 박스 -->
+        <div class="us-forecast-main-box">
+          <div class="forecast-top-row">
+            <span class="f-label">익일 예상 시초가</span>
+            <span class="f-range-label">예상 밴드: <strong class="f-range-val mono" id="usPredictedRange">118,000원 ~ 121,500원</strong></span>
+          </div>
+          <div class="f-price-wrap">
+            <strong class="f-price mono" id="usPredictedPrice">119,500원</strong>
+            <span class="f-gap-badge down-color" id="usPredictedGap">▼ -4.0% 갭하락</span>
+          </div>
+        </div>
+
+        <!-- 미 증시 시나리오 시뮬레이터 컨트롤러 -->
+        <div class="us-scenario-box">
+          <div class="scenario-title-row">
+            <span>🎛️ 미 증시 변동 시뮬레이션:</span>
+            <strong class="mono" id="usScenarioLabel">실시간 본장 시세</strong>
+          </div>
+          <div class="scenario-buttons-row">
+            <button class="btn-scenario active" data-scenario="LIVE" title="실시간 미 증시 시세">실시간 본장</button>
+            <button class="btn-scenario" data-scenario="BULL_STRONG" title="미 증시 랠리 (+2.5%)">랠리 (+2.5%)</button>
+            <button class="btn-scenario" data-scenario="FLAT" title="보합 (0.0%)">보합 (0.0%)</button>
+            <button class="btn-scenario" data-scenario="BEAR_TECH" title="기술주 급락 (-3.5%)">급락 (-3.5%)</button>
+          </div>
+          <div class="scenario-slider-row">
+            <span class="slider-side-label">-5%</span>
+            <input type="range" id="usScenarioSlider" min="-50" max="50" value="0" step="5" />
+            <span class="slider-side-label">+5%</span>
+            <span class="slider-val mono" id="usSliderValDisplay">±0.0%</span>
+          </div>
+        </div>
+
+        <!-- AI 익일 시초가 공략 가이드 코멘터리 -->
+        <div class="us-ai-strategy-box" id="usAiStrategyBox">
+          <!-- 동적 생성 -->
+        </div>
+      </div>
+
+      <!-- 데이트레이딩 실전 타점 가이드 & 리스크/수량 계산기 -->
+      <div class="trade-plan-card">
+        <div class="section-header">
+          <h2 id="tradePlanTitle">🧭 데이트레이딩 타점 가이드</h2>
+          <span class="rr-badge" id="detailRrBadge">손익비 1:2.2</span>
+        </div>
+
+        <div class="price-levels-grid">
+          <div class="level-item entry">
+            <span class="lvl-tag" id="planEntryLabel">권장 진입타점 (돌파/눌림)</span>
+            <strong class="lvl-price mono" id="planEntryPrice">118,000원</strong>
+          </div>
+          <div class="level-item target1">
+            <span class="lvl-tag" id="planTarget1Label">1차 익절 목표가</span>
+            <strong class="lvl-price mono up-color" id="planTarget1Price">122,500원 (+3.8%)</strong>
+          </div>
+          <div class="level-item target2">
+            <span class="lvl-tag" id="planTarget2Label">2차 슈팅 목표가</span>
+            <strong class="lvl-price mono up-color" id="planTarget2Price">125,000원 (+5.9%)</strong>
+          </div>
+          <div class="level-item stoploss">
+            <span class="lvl-tag" id="planStopLabel">손절 기준선 (VWAP 이탈)</span>
+            <strong class="lvl-price mono down-color" id="planStopPrice">115,900원 (-1.8%)</strong>
+          </div>
+        </div>
+
+        <div class="position-calc-box">
+          <div class="calc-title">🧮 1회 매매 리스크 기반 주문수량 계산기</div>
+          <div class="calc-inputs">
+            <div class="calc-field">
+              <label>총 운용자금 (만원)</label>
+              <input type="number" id="inputAccountSize" value="3000" min="100" step="100" />
+            </div>
+            <div class="calc-field">
+              <label>허용 손실률 (%)</label>
+              <input type="number" id="inputRiskPct" value="1.0" min="0.2" max="5.0" step="0.2" />
+            </div>
+          </div>
+          <div class="calc-result-row">
+            <div class="calc-res-item">
+              <span>최대 허용 손실금</span>
+              <strong class="mono" id="calcMaxLossKRW">300,000원</strong>
+            </div>
+            <div class="calc-res-item">
+              <span>권장 매수 수량</span>
+              <strong class="mono highlight-cyan" id="calcRecommendedShares">142주</strong>
+            </div>
+            <div class="calc-res-item">
+              <span>예상 투입 금액</span>
+              <strong class="mono" id="calcPositionCost">1,675만원</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI 주가흐름 코멘터리 -->
+      <div class="ai-commentary-box" id="detailAiCommentary">
+        <!-- 종목의 현재 수급/돌파 상태 자동 분석 코멘트 -->
+      </div>
+    </aside>
+  </main>
+
+  <!-- 모바일 전용 하단 탭 내비게이션 바 (MTS 앱 스타일) -->
+  <nav class="mobile-bottom-nav" id="mobileBottomNav">
+    <button class="m-nav-item" data-panel="left">
+      <span class="m-nav-icon">🎯</span>
+      <span class="m-nav-label">전략·필터</span>
+    </button>
+    <button class="m-nav-item active" data-panel="center">
+      <span class="m-nav-icon">📊</span>
+      <span class="m-nav-label">스캐너</span>
+      <span class="m-nav-count" id="mNavMatchCount">0</span>
+    </button>
+    <button class="m-nav-item" data-panel="right">
+      <span class="m-nav-icon">📈</span>
+      <span class="m-nav-label">종목상세·차트</span>
+      <span class="m-nav-stock-badge" id="mNavStockBadge"></span>
+    </button>
+  </nav>
+
+  <!-- 외부 CSV / JSON 데이터 연동 모달 -->
+  <div class="modal-backdrop hidden" id="importModalBackdrop">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>📥 외부 종목 시세 데이터 연동 (CSV / JSON)</h3>
+        <button id="btnCloseImportModal" class="btn-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          HTS/MTS 조건검색 결과나 KRX 시세 CSV 또는 JSON 데이터를 붙여넣거나 파일로 업로드하면 즉시 주가흐름 엔진에 반영되어 데이트레이딩 타점을 계산합니다.
+        </p>
+        <div class="file-upload-row">
+          <input type="file" id="inputCsvFile" accept=".csv,.json,.txt" />
+          <button id="btnLoadSampleData" class="btn-secondary">샘플 급등주 데이터 채우기</button>
+        </div>
+        <textarea
+          id="textareaImportData"
+          rows="7"
+          placeholder="종목코드,종목명,시장,섹터,현재가,등락률,상대거래량&#10;005930,삼성전자,KOSPI,반도체/장비,71200,4.8,2.9&#10;042700,한미반도체,KOSPI,반도체/장비,124500,7.2,3.6"
+        ></textarea>
+      </div>
+      <div class="modal-footer">
+        <button id="btnCancelImport" class="btn-secondary">취소</button>
+        <button id="btnConfirmImport" class="btn-primary">데이터 병합 및 스캔 실행</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="krxRealSnapshot.js"></script>
+  <script src="stockData.js"></script>
+  <script src="usMarketPredictor.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
