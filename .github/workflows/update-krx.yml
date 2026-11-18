@@ -1,0 +1,28 @@
+name: Update KRX 5m Snapshot
+
+on:
+  schedule:
+    # 월~금 KRX 정규장 시간 (09:05 ~ 15:35 KST = 00:05 ~ 06:35 UTC) 10분마다 자동 갱신
+    - cron: '*/10 0-6 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch latest KRX prices and 5m OHLCV candles
+        shell: pwsh
+        run: pwsh -File ./update_krx_prices.ps1
+
+      - name: Commit and push updated krxRealSnapshot.js
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add krxRealSnapshot.js
+          git diff --staged --quiet || (git commit -m "chore: update KRX live 5m snapshot" && git pull --rebase origin main || true && git push)
