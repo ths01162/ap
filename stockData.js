@@ -143,26 +143,51 @@ function isRegularMarketHoursNow() {
 }
 window.isRegularMarketHoursNow = isRegularMarketHoursNow;
 
-// 스냅샷 데이터가 오늘 생성된 것인지 검증 (KST 기준)
-function isSnapshotFromToday() {
-  if (!window.REAL_KRX_SNAPSHOT_TIME) return false;
+// 스냅샷 데이터가 오늘 당일 장중 세션 데이터인지 검증 (GitHub Actions UTC 타임존 및 로컬 KST 모두 완벽 호환)
+function isSnapshotFromToday(item = null) {
   try {
     const kst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
     const yyyy = kst.getFullYear();
     const mm = String(kst.getMonth() + 1).padStart(2, '0');
     const dd = String(kst.getDate()).padStart(2, '0');
     const todayPrefix = `${yyyy}-${mm}-${dd}`;
+    const todayCompact = `${yyyy}${mm}${dd}`;
+
+    // 1) 네이버 차트 API 원본 캔들 일자(REAL_KRX_CANDLE_DATE: YYYYMMDD)가 명시되어 있으면 100% 정확하게 판별
+    if (window.REAL_KRX_CANDLE_DATE) {
+      return String(window.REAL_KRX_CANDLE_DATE).trim().replace(/-/g, '') === todayCompact;
+    }
+
+    if (!window.REAL_KRX_SNAPSHOT_TIME) return false;
     const timeStr = String(window.REAL_KRX_SNAPSHOT_TIME).trim();
     if (!timeStr.startsWith(todayPrefix)) return false;
 
-    // 장중(09:00~15:30)일 때는 09:00 이후에 생성된 스냅샷만 당일 장중 데이터로 인정!
-    // 00:00 ~ 08:59에 생성된 스냅샷은 전일 장마감 데이터이므로 장중에 당일 분봉으로 오인되지 않도록 엄격 차단
+    // 2) 장중(09:00~15:30 KST)일 때:
+    // GitHub Actions(Ubuntu UTC 서버)에서 생성된 경우 시각이 00:05~06:35(UTC)로 기록되므로,
+    // 단순히 hh < 9로 차단하면 GitHub Actions의 실제 당일 5분봉이 전부 버려지는 문제가 발생함!
+    // 따라서 실제 m5 캔들의 마지막 슬롯 시각을 확인하여,
+    // 전일 마감 풀세션(15:20~15:30, 슬롯 76~78)이면서 현재 KST 시각이 15:15 이전인 경우(자정~장전에 찍힌 어제 스냅샷)만 차단!
     const isMarketOpen = typeof isRegularMarketHoursNow === 'function' ? isRegularMarketHoursNow() : false;
     if (isMarketOpen) {
-      const parts = timeStr.split(' ');
-      if (parts.length >= 2) {
-        const hh = parseInt(parts[1].split(':')[0], 10);
-        if (hh < 9) return false;
+      const currentSlot = getCurrentIntradaySlotIndex();
+      let sampleM5 = item && Array.isArray(item.m5) && item.m5.length > 0 ? item.m5 : null;
+      if (!sampleM5 && Array.isArray(window.REAL_KRX_SNAPSHOT)) {
+        for (let i = 0; i < Math.min(20, window.REAL_KRX_SNAPSHOT.length); i++) {
+          if (Array.isArray(window.REAL_KRX_SNAPSHOT[i].m5) && window.REAL_KRX_SNAPSHOT[i].m5.length > 0) {
+            sampleM5 = window.REAL_KRX_SNAPSHOT[i].m5;
+            break;
+          }
+        }
+      }
+      if (sampleM5 && sampleM5.length > 0) {
+        const lastBar = sampleM5[sampleM5.length - 1];
+        const lastTime = Array.isArray(lastBar) ? String(lastBar[0] || '09:00') : '09:00';
+        const lastSlotInSnap = getSlotIdxFromTimeStr(lastTime);
+        // 현재 시각이 15:15 이전(currentSlot < 75)인데 스냅샷에 15:20~15:30(슬롯 76+) 봉이 들어있다면 자정에 수집된 어제 장마감 데이터임!
+        if (currentSlot < 75 && lastSlotInSnap >= 76) {
+          return false;
+        }
+        return true;
       }
     }
     return true;
@@ -427,7 +452,7 @@ class MarketUniverseEngine {
 
     const isMarketOpen = typeof isRegularMarketHoursNow === 'function' ? isRegularMarketHoursNow() : false;
     const currentSlotIdx = getCurrentIntradaySlotIndex();
-    const snapshotIsToday = isSnapshotFromToday();
+    const snapshotIsToday = isSnapshotFromToday(item);
     const isTodaySession = isMarketOpen;
 
     const candles = [];
@@ -477,7 +502,7 @@ class MarketUniverseEngine {
         });
       }
 
-      // 0번 슬롯(09:00)부터 realLimitSlot(스냅샷 실제 마지막 슬롯)까지 실제 5분봉 배치
+      // 0번 슬롯(09:00)부터 realLimitSlot(스냅샷 실제 마지막 슬롯)까지 100% 실제 네이버/KRX 5분봉만 배치 (임의 가상 파동 생성 완전 제거)
       // 장마감(야간/휴일) 상태에서는 15:30(78번 슬롯)까지 온전한 전체 세션 캔들을 완성하여 우측 공백 방지
       const realLimitSlot = isMarketOpen ? Math.min(currentSlotIdx, maxSlotInM5) : 78;
       snapshotMaxSlot = realLimitSlot;
@@ -498,12 +523,6 @@ class MarketUniverseEngine {
             volume: 0
           });
         }
-      }
-
-      // 장중에 현재 시각(currentSlotIdx)이 스냅샷 마지막 슬롯(realLimitSlot)보다 앞선 경우,
-      // 빈 수평선(—) 대신 평균 변동폭·거래량 기반의 자연스러운 브릿지 캔들로 연결
-      if (isMarketOpen && currentSlotIdx > realLimitSlot) {
-        bridgePostSnapshotCandles(candles, slotMap, realLimitSlot, currentSlotIdx, realPrice, realPrice, realPrice, item.c);
       }
 
       if (candles.length === 1 && !isMarketOpen) {
@@ -1125,56 +1144,72 @@ class MarketUniverseEngine {
             currentSlotIdx,
             stock.code
           );
-          stock._hasLiveBridge = true;
+          stock._liveStreamSlot = currentSlotIdx;
           stock._lastPolledKrxVol = krxVol;
-        } else if (!stock._hasLiveBridge && stock._snapshotMaxSlot != null && currentSlotIdx > stock._snapshotMaxSlot) {
-          // 스냅샷 로드 후 최초 실시간 시세 수신 시:
-          // 스냅샷의 실제 캔들(0 ~ _snapshotMaxSlot)은 100% 보존하고,
-          // 그 이후 ~ 현재 슬롯까지의 구간을 실시간 현재가(newPrice)에 맞춰 왜곡 없이 자연스럽게 재연결
-          candles.length = stock._snapshotMaxSlot + 1;
-          bridgePostSnapshotCandles(
-            candles,
-            stock._rawM5Map,
-            stock._snapshotMaxSlot,
-            currentSlotIdx,
-            newPrice,
-            realHigh,
-            realLow,
-            stock.code
-          );
-          stock._hasLiveBridge = true;
-          stock._lastPolledKrxVol = krxVol;
-        } else if (currentSlotIdx === lastSlotIdx) {
-          // 현재 5분봉 진행 중: 종가, 고가, 저가 및 2초 주기 순증 거래량만 실시간 갱신 (누적 갭 일괄 합산으로 인한 거래량 폭발 원천 차단)
-          lastCandle.close = newPrice;
-          if (newPrice > lastCandle.high) lastCandle.high = newPrice;
-          if (newPrice < lastCandle.low) lastCandle.low = newPrice;
-
-          if (stock._hasLiveBridge && stock._lastPolledKrxVol > 0 && krxVol > stock._lastPolledKrxVol) {
-            const tickVolDiff = krxVol - stock._lastPolledKrxVol;
-            let sumVol = 0, cntVol = 0;
-            for (let i = 1; i < len; i++) {
-              if (candles[i].volume > 0) { sumVol += candles[i].volume; cntVol++; }
+        } else {
+          // 실제 스냅샷 5분봉(_rawM5Map)을 100% 그대로 보존 (임의 가상 파동 생성 절대 금지!)
+          // 만약 _rawM5Map에 아직 반영되지 않은 실제 슬롯 데이터가 있다면 복원
+          if (stock._rawM5Map) {
+            for (let s = lastSlotIdx + 1; s <= currentSlotIdx; s++) {
+              if (stock._rawM5Map.has(s)) {
+                const raw = stock._rawM5Map.get(s);
+                candles.push({
+                  slotIdx: s,
+                  time: raw.time || getSlotTimeLabel(s),
+                  open: raw.open,
+                  high: raw.high,
+                  low: raw.low,
+                  close: raw.close,
+                  volume: raw.volume
+                });
+              }
             }
-            const avgCVol = cntVol > 0 ? Math.round(sumVol / cntVol) : 1000;
-            lastCandle.volume = Math.min(Math.round(avgCVol * 2.2), lastCandle.volume + Math.min(tickVolDiff, Math.round(avgCVol * 0.45)));
           }
-          stock._hasLiveBridge = true;
-          stock._lastPolledKrxVol = krxVol;
-        } else if (currentSlotIdx > lastSlotIdx && currentSlotIdx <= 78) {
-          // 새로운 5분봉 슬롯 진입 시: 자연스러운 브릿지 캔들 생성
-          bridgePostSnapshotCandles(
-            candles,
-            stock._rawM5Map,
-            lastSlotIdx,
-            currentSlotIdx,
-            newPrice,
-            realHigh,
-            realLow,
-            stock.code
-          );
-          stock._hasLiveBridge = true;
-          stock._lastPolledKrxVol = krxVol;
+
+          const activeLast = candles[candles.length - 1];
+          const activeLastSlot = typeof activeLast.slotIdx === 'number' ? activeLast.slotIdx : candles.length - 1;
+
+          if (stock._liveStreamSlot == null) {
+            // 최초 실시간 시세 수신 시: 가장 마지막 실제 5분봉에 현재 실시간 체결가만 반영 (가짜 봉 추가 없음)
+            stock._liveStreamSlot = currentSlotIdx;
+            activeLast.close = newPrice;
+            if (newPrice > activeLast.high) activeLast.high = newPrice;
+            if (newPrice < activeLast.low) activeLast.low = newPrice;
+            stock._lastPolledKrxVol = krxVol;
+          } else if (currentSlotIdx > stock._liveStreamSlot && currentSlotIdx <= 78) {
+            // 사용자가 화면을 켜둔 상태에서 실제 5분 경계가 넘어갔을 때만 실시간 체결 틱으로 새 5분봉 1개 시작
+            stock._liveStreamSlot = currentSlotIdx;
+            const nextSlot = Math.min(78, activeLastSlot + 1);
+            const tickVolDiff = (stock._lastPolledKrxVol > 0 && krxVol > stock._lastPolledKrxVol)
+              ? Math.max(10, krxVol - stock._lastPolledKrxVol)
+              : 10;
+            candles.push({
+              slotIdx: nextSlot,
+              time: getSlotTimeLabel(currentSlotIdx),
+              open: activeLast.close,
+              high: Math.max(activeLast.close, newPrice),
+              low: Math.min(activeLast.close, newPrice),
+              close: newPrice,
+              volume: tickVolDiff
+            });
+            stock._lastPolledKrxVol = krxVol;
+          } else {
+            // 동일 5분 구간 내 2초 주기 실시간 호가 틱 반영
+            activeLast.close = newPrice;
+            if (newPrice > activeLast.high) activeLast.high = newPrice;
+            if (newPrice < activeLast.low) activeLast.low = newPrice;
+
+            if (stock._lastPolledKrxVol > 0 && krxVol > stock._lastPolledKrxVol) {
+              const tickVolDiff = krxVol - stock._lastPolledKrxVol;
+              let sumVol = 0, cntVol = 0;
+              for (let i = 1; i < candles.length; i++) {
+                if (candles[i].volume > 0) { sumVol += candles[i].volume; cntVol++; }
+              }
+              const avgCVol = cntVol > 0 ? Math.round(sumVol / cntVol) : 1000;
+              activeLast.volume = Math.min(Math.round(avgCVol * 2.2), activeLast.volume + Math.min(tickVolDiff, Math.round(avgCVol * 0.45)));
+            }
+            stock._lastPolledKrxVol = krxVol;
+          }
         }
       }
 
@@ -1289,6 +1324,98 @@ class MarketUniverseEngine {
 
     this.recalculateSectorStats();
     return importedCount;
+  }
+
+  // 백그라운드에서 새로 로드된 krxRealSnapshot.js의 최신 실제 5분봉(m5) 데이터를 전 종목에 무중단 동기화
+  syncLiveSnapshotM5(newSnapshotList) {
+    if (!Array.isArray(newSnapshotList) || newSnapshotList.length === 0) return 0;
+    const isMarketOpen = typeof isRegularMarketHoursNow === 'function' ? isRegularMarketHoursNow() : false;
+    const currentSlotIdx = getCurrentIntradaySlotIndex();
+    let updatedCount = 0;
+
+    for (const item of newSnapshotList) {
+      const code = String(item.c || '').trim();
+      if (!code || !Array.isArray(item.m5) || item.m5.length === 0) continue;
+      const stock = this.stockMap.get(code);
+      if (!stock || !isSnapshotFromToday(item)) continue;
+
+      const rawBars = Array.isArray(item.m5[0]) ? item.m5 : [item.m5];
+      const slotMap = new Map();
+      let maxSlotInM5 = 0;
+      let openPrice = stock.openPrice;
+
+      for (let i = 0; i < rawBars.length; i++) {
+        const bar = rawBars[i];
+        const tStr = String(bar[0] || '09:00');
+        const sIdx = getSlotIdxFromTimeStr(tStr);
+        if (isMarketOpen && sIdx > currentSlotIdx) continue;
+
+        const bOpen = Number(bar[1]) || stock.price;
+        const bHigh = Number(bar[2]) || Math.max(bOpen, stock.price);
+        const bLow = Number(bar[3]) || Math.min(bOpen, stock.price);
+        const bClose = Number(bar[4]) || stock.price;
+        const bVol = Math.max(0, Number(bar[5]) || 0);
+
+        if (i === 0) openPrice = bOpen;
+        if (sIdx > maxSlotInM5) maxSlotInM5 = sIdx;
+
+        slotMap.set(sIdx, {
+          slotIdx: sIdx,
+          time: tStr,
+          open: bOpen,
+          high: Math.max(bOpen, bClose, bHigh),
+          low: Math.min(bOpen, bClose, bLow),
+          close: bClose,
+          volume: bVol
+        });
+      }
+
+      if (slotMap.size === 0) continue;
+      if (stock._snapshotMaxSlot != null && maxSlotInM5 <= stock._snapshotMaxSlot && stock._rawM5Map && stock._rawM5Map.size >= slotMap.size) {
+        continue;
+      }
+
+      const realLimitSlot = isMarketOpen ? Math.min(currentSlotIdx, maxSlotInM5) : 78;
+      const newCandles = [];
+      let carryPrice = openPrice;
+      for (let s = 0; s <= realLimitSlot; s++) {
+        if (slotMap.has(s)) {
+          const c = slotMap.get(s);
+          newCandles.push(c);
+          carryPrice = c.close;
+        } else {
+          newCandles.push({
+            slotIdx: s,
+            time: getSlotTimeLabel(s),
+            open: carryPrice,
+            high: carryPrice,
+            low: carryPrice,
+            close: carryPrice,
+            volume: 0
+          });
+        }
+      }
+
+      if (newCandles.length > 0) {
+        const lastC = newCandles[newCandles.length - 1];
+        if (stock.price > 0) {
+          lastC.close = stock.price;
+          if (stock.price > lastC.high) lastC.high = stock.price;
+          if (stock.price < lastC.low) lastC.low = stock.price;
+        }
+        stock.openPrice = openPrice;
+        stock._rawM5Map = slotMap;
+        stock._snapshotMaxSlot = realLimitSlot;
+        stock._liveStreamSlot = currentSlotIdx;
+        stock.candles = newCandles;
+        this.computeIndicators(stock, true);
+        updatedCount++;
+      }
+    }
+    if (updatedCount > 0) {
+      this.recalculateSectorStats();
+    }
+    return updatedCount;
   }
 }
 

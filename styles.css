@@ -730,14 +730,11 @@ input[type="range"] {
   overflow-x: auto;
   padding: 2px 0 2px;
   -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 .scanner-quick-chips::-webkit-scrollbar {
-  height: 4px;
-}
-.scanner-quick-chips::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.3);
-  border-radius: 4px;
+  display: none;
 }
 
 .quick-chip {
@@ -1257,32 +1254,38 @@ body.market-closed tr.tick-down {
   flex-shrink: 0;
 }
 
-/* 기본(정규 장중 09:00~15:30) 패널 순서: 종목헤더 -> 5분봉차트 -> 8종지표 -> 익일예측(숨김) -> 타점가이드 */
+/* 기본(정규 장중 09:00~15:30) 패널 순서: 종목헤더 -> 모바일서브탭 -> 5분봉차트 -> 타점가이드 -> 8종지표 -> 익일예측(숨김) -> AI코멘터리 */
 .right-panel > .detail-header { order: 1; }
-.right-panel > .chart-card { order: 2; }
-.right-panel > .metrics-grid { order: 3; }
-.right-panel > .us-prediction-card { order: 4; }
-.right-panel > .trade-plan-card { order: 5; }
-.right-panel > .strategy-action-card { order: 6; }
+.right-panel > .mobile-right-subtabs { order: 2; }
+.right-panel > .chart-card { order: 3; }
+.right-panel > .trade-plan-card { order: 4; }
+.right-panel > .metrics-grid { order: 5; }
+.right-panel > .us-prediction-card { order: 6; }
+.right-panel > .ai-commentary-box { order: 7; }
+.right-panel > .strategy-action-card { order: 8; }
 
 /* 🇺🇸 장마감 모드 & 익일 공략 모드 최적화:
-   가장 중요한 [미 증시 연동 익일 시초가 예측]을 차트 바로 위(종목헤더 바로 밑) order: 2로 승격하여
+   가장 중요한 [미 증시 연동 익일 시초가 예측]을 차트 바로 위(종목헤더 바로 밑)로 승격하여
    스크롤 없이 화면 상단에 100% 온전히 표시되도록 보장! */
 body.market-closed .right-panel > .us-prediction-card,
 body.next-day-mode .right-panel > .us-prediction-card {
-  order: 2 !important;
+  order: 3 !important;
 }
 body.market-closed .right-panel > .chart-card,
 body.next-day-mode .right-panel > .chart-card {
-  order: 3 !important;
-}
-body.market-closed .right-panel > .metrics-grid,
-body.next-day-mode .right-panel > .metrics-grid {
   order: 4 !important;
 }
 body.market-closed .right-panel > .trade-plan-card,
 body.next-day-mode .right-panel > .trade-plan-card {
   order: 5 !important;
+}
+body.market-closed .right-panel > .metrics-grid,
+body.next-day-mode .right-panel > .metrics-grid {
+  order: 6 !important;
+}
+body.market-closed .right-panel > .ai-commentary-box,
+body.next-day-mode .right-panel > .ai-commentary-box {
+  order: 7 !important;
 }
 
 .detail-header {
@@ -1755,12 +1758,21 @@ body.next-day-mode .right-panel > .trade-plan-card {
   line-height: 1.3;
 }
 .lvl-price {
-  font-size: 12px;
+  font-size: 11.5px;
   margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 2px 4px;
   font-weight: 700;
+  line-height: 1.25;
+}
+.lvl-pct {
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.92;
+  white-space: nowrap;
 }
 
 .position-calc-box {
@@ -2357,26 +2369,51 @@ body.next-day-mode .us-prediction-card {
    💻 태블릿 전용 고해상도 반응형 레이아웃 (iPad Pro, iPad Air, Galaxy Tab: 901px ~ 1200px)
    ============================================================================ */
 @media (min-width: 901px) and (max-width: 1200px) {
+  .shortcut-help-badge {
+    display: none !important;
+  }
+  .btn-text-full {
+    display: none !important;
+  }
+  .btn-text-short {
+    display: inline !important;
+  }
+  #selectSimSpeed,
+  #btnOpenImportModal {
+    display: none !important;
+  }
   .workspace-grid {
-    grid-template-columns: 210px minmax(0, 1fr) 330px;
+    grid-template-columns: minmax(0, 1fr) 335px !important;
     gap: 6px;
     padding: 6px;
+    position: relative;
   }
-  .workspace-grid.left-collapsed {
-    grid-template-columns: minmax(0, 1fr) 330px !important;
-  }
-  .left-panel {
-    padding: 8px 6px;
+  .workspace-grid .left-panel {
+    position: absolute;
+    left: 6px;
+    top: 6px;
+    bottom: 6px;
+    width: 265px;
+    z-index: 45;
+    box-shadow: 12px 0 32px rgba(0, 0, 0, 0.78);
+    border-color: var(--accent-cyan);
+    padding: 8px;
     gap: 8px;
+  }
+  .workspace-grid .center-panel {
+    grid-column: 1 !important;
+  }
+  .workspace-grid .right-panel {
+    grid-column: 2 !important;
   }
   .preset-card {
     padding: 6px 8px;
   }
   .preset-title {
-    font-size: 11px;
+    font-size: 11.5px;
   }
   .preset-desc {
-    font-size: 9.5px;
+    font-size: 10px;
     line-height: 1.3;
   }
   .top-header {
@@ -2387,7 +2424,7 @@ body.next-day-mode .us-prediction-card {
     gap: 0;
   }
   .kpi-item {
-    padding: 0 5px;
+    padding: 0 6px;
   }
   .kpi-item .kpi-label {
     font-size: 9px;
@@ -2400,7 +2437,7 @@ body.next-day-mode .us-prediction-card {
     gap: 6px;
   }
   .search-box {
-    max-width: 280px;
+    max-width: 320px;
   }
   .toolbar-stats {
     font-size: 10.5px;
@@ -2637,30 +2674,37 @@ body.next-day-mode .us-prediction-card {
 
   .m-nav-count {
     position: absolute;
-    top: 5px;
-    right: calc(50% - 20px);
+    top: 4px;
+    left: calc(50% + 10px);
+    right: auto;
     background: rgba(56, 189, 248, 0.25);
     color: var(--accent-cyan);
-    border: 1px solid rgba(56, 189, 248, 0.4);
+    border: 1px solid rgba(56, 189, 248, 0.45);
     font-size: 9px;
     font-weight: 700;
     padding: 0 4px;
     border-radius: 8px;
+    line-height: 1.3;
+    pointer-events: none;
   }
 
   .m-nav-stock-badge {
     position: absolute;
-    top: 3px;
-    right: calc(50% - 32px);
+    top: 4px;
+    left: calc(50% + 10px);
+    right: auto;
     font-size: 8.5px;
-    color: #cbd5e1;
-    background: rgba(99, 102, 241, 0.3);
-    border-radius: 3px;
-    padding: 0 3px;
-    max-width: 50px;
+    color: #e0e7ff;
+    background: rgba(99, 102, 241, 0.35);
+    border: 1px solid rgba(129, 140, 248, 0.4);
+    border-radius: 4px;
+    padding: 0 4px;
+    max-width: 56px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    line-height: 1.3;
+    pointer-events: none;
   }
 
   /* 모바일 서브탭 공통 (세로 스크롤 대폭 감소) */
@@ -2944,7 +2988,9 @@ body.next-day-mode .us-prediction-card {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 85px;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 155px;
   }
   .m-card-code {
     font-size: 9.5px;
@@ -3188,6 +3234,8 @@ body.next-day-mode .us-prediction-card {
   body[data-m-panel="right"][data-m-rtab="chart"] .us-prediction-card,
   body[data-m-panel="right"]:not([data-m-rtab]) .trade-plan-card,
   body[data-m-panel="right"][data-m-rtab="chart"] .trade-plan-card,
+  body[data-m-panel="right"]:not([data-m-rtab]) .ai-commentary-box,
+  body[data-m-panel="right"][data-m-rtab="chart"] .ai-commentary-box,
   body[data-m-panel="right"]:not([data-m-rtab]) .strategy-action-card,
   body[data-m-panel="right"][data-m-rtab="chart"] .strategy-action-card {
     display: none !important;
@@ -3195,6 +3243,7 @@ body.next-day-mode .us-prediction-card {
 
   /* 서브탭 2: 🧭 타점 가이드 + 수량계산기 + AI 코멘터리 */
   body[data-m-panel="right"][data-m-rtab="plan"] .trade-plan-card,
+  body[data-m-panel="right"][data-m-rtab="plan"] .ai-commentary-box,
   body[data-m-panel="right"][data-m-rtab="plan"] .strategy-action-card {
     display: block !important;
   }
@@ -3211,6 +3260,7 @@ body.next-day-mode .us-prediction-card {
   body[data-m-panel="right"][data-m-rtab="us-predict"] .chart-card,
   body[data-m-panel="right"][data-m-rtab="us-predict"] .metrics-grid,
   body[data-m-panel="right"][data-m-rtab="us-predict"] .trade-plan-card,
+  body[data-m-panel="right"][data-m-rtab="us-predict"] .ai-commentary-box,
   body[data-m-panel="right"][data-m-rtab="us-predict"] .strategy-action-card {
     display: none !important;
   }
@@ -3224,6 +3274,7 @@ body.next-day-mode .us-prediction-card {
     display: grid !important;
   }
   body[data-m-panel="right"][data-m-rtab="all"] .trade-plan-card,
+  body[data-m-panel="right"][data-m-rtab="all"] .ai-commentary-box,
   body[data-m-panel="right"][data-m-rtab="all"] .strategy-action-card {
     display: block !important;
   }

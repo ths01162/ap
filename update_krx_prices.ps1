@@ -115,28 +115,38 @@ for ($i = 0; $i -lt $allStocks.Count; $i++) {
                     }
                 }
             }
-            return @{ idx = $idx; m5 = $arr }
+            return @{ idx = $idx; m5 = $arr; dt = $latestDate }
         } catch {
-            return @{ idx = $idx; m5 = @() }
+            return @{ idx = $idx; m5 = @(); dt = "" }
         }
     }).AddArgument($code).AddArgument($i)
     $ps.RunspacePool = $runspacePool
     $jobs += @{ ps = $ps; handle = $ps.BeginInvoke() }
 }
 
+$candleDateStr = ""
 foreach ($j in $jobs) {
     $res = $j.ps.EndInvoke($j.handle)
     if ($res -and $res.m5.Count -gt 0) {
         $allStocks[$res.idx].m5 = $res.m5
+        if (-not $candleDateStr -and $res.dt) {
+            $candleDateStr = $res.dt
+        }
     }
     $j.ps.Dispose()
 }
 $runspacePool.Close()
 
 $json = $allStocks | ConvertTo-Json -Depth 6 -Compress
-$nowStr = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-$jsContent = "// Auto-generated real KRX stocks snapshot + real 5-minute OHLCV candles`nwindow.REAL_KRX_SNAPSHOT = $json;`nwindow.REAL_KRX_SNAPSHOT_TIME = `"$nowStr`";`n"
+# GitHub Actions(Ubuntu UTC) 및 로컬(Windows KST) 어디서 실행되든 항상 한국 표준시(KST = UTC+9)로 기록!
+$kstNow = (Get-Date).ToUniversalTime().AddHours(9)
+$nowStr = $kstNow.ToString("yyyy-MM-dd HH:mm:ss")
+if (-not $candleDateStr) {
+    $candleDateStr = $kstNow.ToString("yyyyMMdd")
+}
+$jsContent = "// Auto-generated real KRX stocks snapshot + real 5-minute OHLCV candles`nwindow.REAL_KRX_SNAPSHOT = $json;`nwindow.REAL_KRX_SNAPSHOT_TIME = `"$nowStr`";`nwindow.REAL_KRX_CANDLE_DATE = `"$candleDateStr`";`n"
 $destPath = Join-Path $PSScriptRoot "krxRealSnapshot.js"
-[System.IO.File]::WriteAllText($destPath, $jsContent, [System.Text.Encoding]::UTF8)
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($destPath, $jsContent, $utf8NoBom)
 
-Write-Host "완료! 총 $($allStocks.Count)개 KRX 실제 종목 시세 + 실제 5분봉 차트가 krxRealSnapshot.js에 저장되었습니다. ($nowStr)" -ForegroundColor Green
+Write-Host "완료! 총 $($allStocks.Count)개 KRX 실제 종목 시세 + 실제 5분봉 차트가 krxRealSnapshot.js에 저장되었습니다. (KST: $nowStr / 캔들일자: $candleDateStr)" -ForegroundColor Green

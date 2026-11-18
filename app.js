@@ -422,6 +422,12 @@
     if (el.mNavMatchCount) {
       el.mNavMatchCount.textContent = filteredStocks.length.toLocaleString();
     }
+    const btnMarketAll = document.getElementById('btnMarketAll');
+    if (btnMarketAll) btnMarketAll.textContent = `전체 (${totalUniverse.toLocaleString()})`;
+    const presetAllTitle = document.getElementById('presetAllUniverseTitle');
+    if (presetAllTitle) presetAllTitle.textContent = `🌐 KRX 전체 ${totalUniverse.toLocaleString()}종목`;
+    const presetAllDesc = document.getElementById('presetAllUniverseDesc');
+    if (presetAllDesc) presetAllDesc.textContent = `필터 제약 없이 ${totalUniverse.toLocaleString()}개 전체 상장종목의 KRX 실제 현재가·등락률·거래대금 확인`;
 
     // 전체 유니버스 통계 업데이트
     let rvolSurgeCount = 0;
@@ -836,11 +842,11 @@
       const stopPrice = Math.min(stock.low, Math.round(stock.price * 0.978));
 
       el.detailRrBadge.textContent = `손익비 1:2.5 · AI ${stock.score}점`;
-      el.planEntryPrice.textContent = `시초가 + ${nextBreakoutOffset.toLocaleString()}원`;
-      el.planTarget1Price.textContent = `${target1Price.toLocaleString()}원 (+3.5%)`;
-      el.planTarget2Price.textContent = `${target2Price.toLocaleString()}원 (+6.0%)`;
+      el.planEntryPrice.innerHTML = `<span>시초가+${nextBreakoutOffset.toLocaleString()}원</span>`;
+      el.planTarget1Price.innerHTML = `<span>${target1Price.toLocaleString()}원</span><span class="lvl-pct">+3.5%</span>`;
+      el.planTarget2Price.innerHTML = `<span>${target2Price.toLocaleString()}원</span><span class="lvl-pct">+6.0%</span>`;
       const stopPct = (((stopPrice - stock.price) / stock.price) * 100).toFixed(1);
-      el.planStopPrice.textContent = `${stopPrice.toLocaleString()}원 (${stopPct}%)`;
+      el.planStopPrice.innerHTML = `<span>${stopPrice.toLocaleString()}원</span><span class="lvl-pct">${stopPct}%</span>`;
     } else {
       if (el.tradePlanTitle) el.tradePlanTitle.innerHTML = '🧭 데이트레이딩 타점 가이드';
       if (el.planEntryLabel) el.planEntryLabel.textContent = plan.entryLabel || '권장 진입타점 (눌림목 지지)';
@@ -854,13 +860,16 @@
       const diffSign = plan.entryPrice > stock.price ? '+' : '';
       const diffBadge = plan.entryPrice === stock.price
         ? ''
-        : `<span style="font-size:10px;font-weight:700;color:${plan.entryPrice < stock.price ? '#38bdf8' : '#ff6b81'};margin-left:3px;vertical-align:baseline;">(${diffSign}${diffFromCurrent}% ${plan.entryPrice < stock.price ? '눌림' : '돌파'})</span>`;
+        : `<span class="lvl-pct" style="color:${plan.entryPrice < stock.price ? '#38bdf8' : '#ff6b81'};">${diffSign}${diffFromCurrent}% ${plan.entryPrice < stock.price ? '눌림' : '돌파'}</span>`;
 
-      el.planEntryPrice.innerHTML = `${plan.entryPrice.toLocaleString()}원${diffBadge}`;
-      el.planTarget1Price.textContent = `${plan.target1Price.toLocaleString()}원 (+${plan.target1Pct}%)`;
-      const target2Pct = (((plan.target2Price - plan.entryPrice) / plan.entryPrice) * 100).toFixed(2);
-      el.planTarget2Price.textContent = `${plan.target2Price.toLocaleString()}원 (+${target2Pct}%)`;
-      el.planStopPrice.textContent = `${plan.stopLossPrice.toLocaleString()}원 (${plan.stopLossPct}%)`;
+      const t1Pct = Number(plan.target1Pct).toFixed(1);
+      const t2Pct = (((plan.target2Price - plan.entryPrice) / plan.entryPrice) * 100).toFixed(1);
+      const slPct = Number(plan.stopLossPct).toFixed(1);
+
+      el.planEntryPrice.innerHTML = `<span>${plan.entryPrice.toLocaleString()}원</span>${diffBadge}`;
+      el.planTarget1Price.innerHTML = `<span>${plan.target1Price.toLocaleString()}원</span><span class="lvl-pct">+${t1Pct}%</span>`;
+      el.planTarget2Price.innerHTML = `<span>${plan.target2Price.toLocaleString()}원</span><span class="lvl-pct">+${t2Pct}%</span>`;
+      el.planStopPrice.innerHTML = `<span>${plan.stopLossPrice.toLocaleString()}원</span><span class="lvl-pct">${slPct}%</span>`;
     }
 
     updatePositionCalculator(stock);
@@ -1031,6 +1040,9 @@
 
     // 1) ORB 30분 고점 수평 점선 (하늘색)
     const yOrb = yOfPrice(stock.orbHigh);
+    const yPrevH = yOfPrice(stock.prevHigh);
+    const isLinesClose = Math.abs(yOrb - yPrevH) < 15;
+
     if (yOrb >= padTop && yOrb <= priceAreaH) {
       ctx.save();
       ctx.setLineDash([4, 3]);
@@ -1040,13 +1052,18 @@
       ctx.moveTo(padLeft, yOrb);
       ctx.lineTo(width - padRight, yOrb);
       ctx.stroke();
+
+      const lblOrb = 'ORB고점';
+      const lblX = width - padRight - 46;
+      const lblY = isLinesClose && yOrb > yPrevH ? Math.min(priceAreaH - 2, yOrb + 11) : Math.max(padTop + 9, yOrb - 4);
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+      ctx.fillRect(lblX - 2, lblY - 9, 44, 12);
       ctx.fillStyle = '#38bdf8';
-      ctx.fillText('ORB고점', padLeft + 4, yOrb - 3);
+      ctx.fillText(lblOrb, lblX, lblY);
       ctx.restore();
     }
 
     // 2) 전일 고가 수평 점선 (보라색)
-    const yPrevH = yOfPrice(stock.prevHigh);
     if (yPrevH >= padTop && yPrevH <= priceAreaH) {
       ctx.save();
       ctx.setLineDash([2, 3]);
@@ -1056,8 +1073,14 @@
       ctx.moveTo(padLeft, yPrevH);
       ctx.lineTo(width - padRight, yPrevH);
       ctx.stroke();
+
+      const lblPrev = '전일고가';
+      const lblX = width - padRight - (isLinesClose ? 94 : 46);
+      const lblY = isLinesClose && yPrevH >= yOrb ? Math.min(priceAreaH - 2, yPrevH + 11) : Math.max(padTop + 9, yPrevH - 4);
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+      ctx.fillRect(lblX - 2, lblY - 9, 44, 12);
       ctx.fillStyle = '#c084fc';
-      ctx.fillText('전일고가', padLeft + 52, yPrevH - 3);
+      ctx.fillText(lblPrev, lblX, lblY);
       ctx.restore();
     }
 
@@ -1289,16 +1312,47 @@
     });
   }
 
+  // 백그라운드에서 최신 krxRealSnapshot.js를 무중단 리로드하여 새로 추가된 5분봉(m5) 자동 반영
+  let lastSnapshotReloadTs = Date.now();
+  function reloadSnapshotM5Script() {
+    return new Promise((resolve) => {
+      const prevTime = window.REAL_KRX_SNAPSHOT_TIME;
+      const script = document.createElement('script');
+      script.src = `krxRealSnapshot.js?_t=${Date.now()}`;
+      script.onload = () => {
+        if (script.parentNode) script.parentNode.removeChild(script);
+        if (window.REAL_KRX_SNAPSHOT && window.REAL_KRX_SNAPSHOT_TIME !== prevTime && typeof engine.syncLiveSnapshotM5 === 'function') {
+          const cnt = engine.syncLiveSnapshotM5(window.REAL_KRX_SNAPSHOT);
+          if (cnt > 0) {
+            refreshAllViews(false);
+          }
+        }
+        resolve(true);
+      };
+      script.onerror = () => {
+        if (script.parentNode) script.parentNode.removeChild(script);
+        resolve(false);
+      };
+      document.head.appendChild(script);
+    });
+  }
+
   // 현재 화면의 포착 종목 + 선택 종목 + 전체 유니버스 순환 배치를 실시간 KRX 시세로 갱신
   async function pollLiveKrxPrices(forceFullSweep = false) {
+    if (!forceFullSweep && Date.now() - lastSnapshotReloadTs >= 60000) {
+      lastSnapshotReloadTs = Date.now();
+      reloadSnapshotM5Script();
+    }
     if (forceFullSweep) {
-      // 전체 1,381개 종목을 180개씩 나누어 병렬/순차 고속 동기화
+      lastSnapshotReloadTs = Date.now();
+      await reloadSnapshotM5Script();
+      // 전체 종목을 180개씩 나누어 병렬/순차 고속 동기화
       const allCodes = engine.stocks.map(s => s.code);
       const chunkSize = 180;
       const allUpdatedCodes = new Set();
 
       if (el.brandSnapshotSubtitle) {
-        el.brandSnapshotSubtitle.textContent = 'KRX 전체 1,381종목 실시간 시세 동기화 중...';
+        el.brandSnapshotSubtitle.textContent = `KRX 전체 ${allCodes.length.toLocaleString()}종목 실시간 시세 동기화 중...`;
       }
 
       for (let i = 0; i < allCodes.length; i += chunkSize) {
@@ -1578,8 +1632,8 @@
     document.body.classList.toggle('m-table-view', !state.mobileCardView);
     if (el.btnToggleMobileTableView) {
       el.btnToggleMobileTableView.innerHTML = state.mobileCardView
-        ? `<span class="m-view-icon">📱</span> <span class="m-view-text">간편 뷰</span>`
-        : `<span class="m-view-icon">📊</span> <span class="m-view-text">전체 표</span>`;
+        ? `<span class="m-view-icon">📊</span> <span class="m-view-text">표로 보기</span>`
+        : `<span class="m-view-icon">📱</span> <span class="m-view-text">카드 뷰</span>`;
       el.btnToggleMobileTableView.classList.toggle('active', !state.mobileCardView);
     }
   }
@@ -1844,8 +1898,18 @@
       if (stock) updatePositionCalculator(stock);
     });
 
-    // 창 크기 변경 시 차트 재렌더링
+    // 창 크기 변경 시 차트 재렌더링 및 태블릿 사이드바 자동 반응형 조절
+    let userManuallyToggledSidebar = false;
     window.addEventListener('resize', () => {
+      if (!userManuallyToggledSidebar && el.workspaceGrid && el.btnToggleLeftPanel) {
+        if (window.innerWidth <= 1200 && window.innerWidth > 900) {
+          el.workspaceGrid.classList.add('left-collapsed');
+          el.btnToggleLeftPanel.classList.add('active');
+        } else if (window.innerWidth > 1200) {
+          el.workspaceGrid.classList.remove('left-collapsed');
+          el.btnToggleLeftPanel.classList.remove('active');
+        }
+      }
       const stock = engine.stockMap.get(state.selectedCode);
       if (stock) drawIntradayChart(stock);
     });
@@ -1853,13 +1917,14 @@
     // 좌측 전략·필터 사이드바 접기/펼치기 토글 (태블릿 & 데스크톱 스캐너 최대화)
     if (el.btnToggleLeftPanel && el.workspaceGrid) {
       el.btnToggleLeftPanel.addEventListener('click', () => {
+        userManuallyToggledSidebar = true;
         const isCollapsed = el.workspaceGrid.classList.toggle('left-collapsed');
         el.btnToggleLeftPanel.classList.toggle('active', isCollapsed);
         el.btnToggleLeftPanel.title = isCollapsed ? '전략·필터 패널 펼치기' : '전략·필터 사이드바 접기 (스캐너 최대화)';
       });
 
-      // 태블릿(901px ~ 1100px)에서는 진입 시 기본으로 사이드바를 접어 중앙 스캐너 영역을 넓게 확보
-      if (window.innerWidth <= 1100 && window.innerWidth > 900) {
+      // 태블릿(901px ~ 1200px)에서는 진입 시 기본으로 사이드바를 접어 중앙 스캐너 영역을 넓게 확보
+      if (window.innerWidth <= 1200 && window.innerWidth > 900) {
         el.workspaceGrid.classList.add('left-collapsed');
         el.btnToggleLeftPanel.classList.add('active');
         el.btnToggleLeftPanel.title = '전략·필터 패널 펼치기';
