@@ -172,41 +172,57 @@ function isSnapshotFromToday() {
 }
 window.isSnapshotFromToday = isSnapshotFromToday;
 
-// 당일 정규장 5분봉 세션 생성 헬퍼 (09:00 ~ 현재 슬롯까지의 캔들 생성)
-function createTodayCandles(openP, highP, lowP, currentP, totalV, currentSlotIdx) {
+// 당일 정규장 5분봉 세션 생성 헬퍼 (09:00 ~ 현재 슬롯까지의 자연스러운 캔들 생성)
+function createTodayCandles(openP, highP, lowP, currentP, totalV, currentSlotIdx, seedCode = 105930) {
   const candles = [];
   const openPrice = roundToTick(openP || currentP);
   const targetP = roundToTick(currentP);
   const count = Math.max(1, currentSlotIdx + 1);
-  const avgVol = Math.max(10, Math.round(totalV / count));
+  const avgVol = Math.max(10, Math.round((totalV * 0.65) / count));
+  const rng = createSeededRandom((parseInt(seedCode, 10) || 105930) * 73 + 20261118);
 
-  // 당일 최고가와 최저가가 특정 봉에 왜곡 집중되지 않도록 자연스러운 파동 배분
-  const peakSlot = count > 1 ? Math.min(count - 1, Math.max(0, Math.floor(count * 0.35))) : 0;
-  const troughSlot = count > 1 ? Math.min(count - 1, Math.max(0, Math.floor(count * 0.65))) : 0;
+  const dayH = Math.max(openPrice, targetP, highP || targetP);
+  const dayL = Math.min(openPrice, targetP, lowP || targetP);
+  const daySpan = Math.max(getTickSize(targetP) * 4, dayH - dayL);
+
+  const isUpDay = targetP >= openPrice;
+  const firstPeakSlot = count > 2 ? Math.max(1, Math.floor(count * (isUpDay ? 0.28 : 0.68))) : 0;
+  const firstTroughSlot = count > 2 ? Math.max(1, Math.floor(count * (isUpDay ? 0.62 : 0.30))) : 0;
 
   let prevClose = openPrice;
   for (let s = 0; s <= currentSlotIdx; s++) {
     const isLast = (s === currentSlotIdx);
     const progress = count > 1 ? s / (count - 1) : 1;
     const cOpen = prevClose;
-    let cClose = isLast ? targetP : roundToTick(openPrice + (targetP - openPrice) * progress);
+    const tick = getTickSize(cOpen);
 
-    const tick = getTickSize(cClose);
-    let cHigh = Math.max(cOpen, cClose);
-    let cLow = Math.min(cOpen, cClose);
-
-    if (s === peakSlot && highP > cHigh) {
-      cHigh = Math.min(highP, cHigh + tick * 2);
+    let cClose;
+    if (isLast) {
+      cClose = targetP;
+    } else if (s === firstPeakSlot && dayH > Math.max(openPrice, targetP)) {
+      cClose = roundToTick(dayH - tick * (1 + Math.floor(rng() * 2)));
+    } else if (s === firstTroughSlot && dayL < Math.min(openPrice, targetP)) {
+      cClose = roundToTick(dayL + tick * (1 + Math.floor(rng() * 2)));
     } else {
-      cHigh += tick;
-    }
-    if (s === troughSlot && lowP < cLow) {
-      cLow = Math.max(lowP, cLow - tick * 2);
-    } else {
-      cLow = Math.max(tick, cLow - tick);
+      const baseP = openPrice + (targetP - openPrice) * progress;
+      const wave = Math.sin(progress * Math.PI * 2.5) * (daySpan * 0.14) + (rng() - 0.48) * (daySpan * 0.18);
+      cClose = roundToTick(Math.min(dayH, Math.max(dayL, baseP + wave)));
+      if (cClose === cOpen) {
+        cClose = roundToTick(Math.min(dayH, Math.max(dayL, cOpen + (rng() > 0.48 ? tick : -tick))));
+      }
     }
 
-    const cVol = isLast ? Math.max(avgVol, totalV - avgVol * (count - 1)) : avgVol;
+    const bodySpan = Math.abs(cClose - cOpen);
+    const wickUp = roundToTick(Math.max(tick, bodySpan * (0.2 + rng() * 0.5)));
+    const wickDown = roundToTick(Math.max(tick, bodySpan * (0.2 + rng() * 0.5)));
+
+    let cHigh = Math.min(dayH, Math.max(cOpen, cClose) + (isLast ? tick : wickUp));
+    let cLow = Math.max(dayL, Math.min(cOpen, cClose) - (isLast ? tick : wickDown));
+    if (s === firstPeakSlot) cHigh = dayH;
+    if (s === firstTroughSlot) cLow = dayL;
+
+    const uShape = s === 0 ? 1.8 : s < 4 ? 1.35 : 0.65 + rng() * 0.7;
+    const cVol = Math.max(10, Math.round(avgVol * uShape));
 
     candles.push({
       slotIdx: s,
@@ -215,11 +231,95 @@ function createTodayCandles(openP, highP, lowP, currentP, totalV, currentSlotIdx
       high: Math.max(cOpen, cClose, cHigh),
       low: Math.min(cOpen, cClose, cLow),
       close: cClose,
-      volume: Math.max(10, cVol)
+      volume: cVol
     });
     prevClose = cClose;
   }
   return candles;
+}
+
+// 스냅샷 마지막 슬롯 이후 ~ 현재 실시간 슬롯 사이의 공백을 왜곡(수평선/거래량 폭발) 없이 자연스럽게 연결하는 헬퍼
+function bridgePostSnapshotCandles(candles, rawM5Map, startSlot, endSlot, targetPrice, dayHigh, dayLow, seedCode = 105930) {
+  if (endSlot <= startSlot || candles.length === 0) return;
+
+  // 기존 실제 캔들들의 평균 5분 변동폭 및 평균 5분 거래량 산출 (09:00 동시호가 급증봉 제외한 안정적 중앙값 수준)
+  let sumRange = 0;
+  let sumVol = 0;
+  let validVolCount = 0;
+  for (let i = 0; i < candles.length; i++) {
+    const c = candles[i];
+    sumRange += Math.max(getTickSize(c.close), c.high - c.low);
+    if (c.volume > 0 && (i > 0 || candles.length === 1)) {
+      sumVol += c.volume;
+      validVolCount++;
+    }
+  }
+  const tick = getTickSize(targetPrice);
+  const avgRange = Math.max(tick * 2, sumRange / Math.max(1, candles.length));
+  const avgVol = validVolCount > 0 ? Math.max(10, Math.round(sumVol / validVolCount)) : 500;
+
+  const startCandle = candles[candles.length - 1];
+  const startPrice = startCandle.close;
+  let pClose = startPrice;
+  const gap = endSlot - startSlot;
+  const boundHigh = Math.max(startPrice, targetPrice, dayHigh || targetPrice);
+  const boundLow = Math.min(startPrice, targetPrice, dayLow || targetPrice);
+
+  for (let s = startSlot + 1; s <= endSlot; s++) {
+    const isLast = (s === endSlot);
+    if (rawM5Map && rawM5Map.has(s)) {
+      const raw = rawM5Map.get(s);
+      const cCandle = {
+        slotIdx: s,
+        time: raw.time || getSlotTimeLabel(s),
+        open: raw.open,
+        high: isLast ? Math.max(raw.high, targetPrice) : raw.high,
+        low: isLast ? Math.min(raw.low, targetPrice) : raw.low,
+        close: isLast ? targetPrice : raw.close,
+        volume: raw.volume > 0 ? raw.volume : Math.round(avgVol * 0.7)
+      };
+      candles.push(cCandle);
+      pClose = cCandle.close;
+      continue;
+    }
+
+    const rng = createSeededRandom((parseInt(seedCode, 10) || 105930) * 131 + s * 37 + 2026);
+    const t = (s - startSlot) / gap;
+    const cOpen = pClose;
+    let cClose;
+
+    if (isLast) {
+      cClose = targetPrice;
+    } else {
+      const linearP = startPrice + (targetPrice - startPrice) * t;
+      const wave = Math.sin(t * Math.PI * (gap >= 4 ? 2 : 1)) * (avgRange * 0.45) + (rng() - 0.5) * (avgRange * 0.65);
+      cClose = roundToTick(Math.min(boundHigh, Math.max(boundLow, linearP + wave)));
+      if (cClose === cOpen) {
+        const dir = targetPrice >= cOpen ? (rng() > 0.35 ? 1 : -1) : (rng() > 0.35 ? -1 : 1);
+        cClose = roundToTick(Math.min(boundHigh, Math.max(boundLow, cOpen + dir * tick)));
+      }
+    }
+
+    const bodySpan = Math.abs(cClose - cOpen);
+    const wickUp = roundToTick(Math.max(tick, (bodySpan + avgRange * 0.35) * (0.2 + rng() * 0.45)));
+    const wickDown = roundToTick(Math.max(tick, (bodySpan + avgRange * 0.35) * (0.2 + rng() * 0.45)));
+
+    const cHigh = Math.min(boundHigh, Math.max(cOpen, cClose) + (isLast ? tick : wickUp));
+    const cLow = Math.max(boundLow, Math.min(cOpen, cClose) - (isLast ? tick : wickDown));
+    const volFactor = isLast ? (0.45 + rng() * 0.45) : (0.55 + rng() * 0.65);
+    const cVol = Math.max(10, Math.round(avgVol * volFactor));
+
+    candles.push({
+      slotIdx: s,
+      time: getSlotTimeLabel(s),
+      open: cOpen,
+      high: Math.max(cOpen, cClose, cHigh),
+      low: Math.min(cOpen, cClose, cLow),
+      close: cClose,
+      volume: cVol
+    });
+    pClose = cClose;
+  }
 }
 
 // 현재 시각(KST) 기준 정규장(09:00 ~ 15:30) 활성 5분봉 인덱스(0 ~ 78, 총 79슬롯) 반환
@@ -334,6 +434,7 @@ class MarketUniverseEngine {
     const totalVol = realVolume;
     let openPrice = roundToTick(Math.max(100, prevClose));
     let rawM5Map = null;
+    let snapshotMaxSlot = null;
 
     // 1) 실제 KRX 5분봉 데이터(item.m5) 처리 조건:
     // - 장마감 상태(야간/주말/장전)일 때는 스냅샷의 전체 캔들을 그대로 표시
@@ -376,31 +477,33 @@ class MarketUniverseEngine {
         });
       }
 
-      // 0번 슬롯(09:00)부터 limitSlot까지 빠진 5분봉 슬롯(무거래/동시호가 구간)을 직전 종가 보합봉으로 채워 시간축 왜곡 방지
+      // 0번 슬롯(09:00)부터 realLimitSlot(스냅샷 실제 마지막 슬롯)까지 실제 5분봉 배치
       // 장마감(야간/휴일) 상태에서는 15:30(78번 슬롯)까지 온전한 전체 세션 캔들을 완성하여 우측 공백 방지
-      const limitSlot = isMarketOpen ? currentSlotIdx : 78;
+      const realLimitSlot = isMarketOpen ? Math.min(currentSlotIdx, maxSlotInM5) : 78;
+      snapshotMaxSlot = realLimitSlot;
       let carryPrice = openPrice;
-      for (let s = 0; s <= limitSlot; s++) {
+      for (let s = 0; s <= realLimitSlot; s++) {
         if (slotMap.has(s)) {
           const c = slotMap.get(s);
           candles.push(c);
           carryPrice = c.close;
         } else {
-          const isCurrentActive = (isMarketOpen && s === limitSlot);
-          const cClose = isCurrentActive && realPrice > 0 ? realPrice : carryPrice;
-          const cHigh = isCurrentActive ? Math.max(carryPrice, cClose) : carryPrice;
-          const cLow = isCurrentActive ? Math.min(carryPrice, cClose) : carryPrice;
           candles.push({
             slotIdx: s,
             time: getSlotTimeLabel(s),
             open: carryPrice,
-            high: cHigh,
-            low: cLow,
-            close: cClose,
+            high: carryPrice,
+            low: carryPrice,
+            close: carryPrice,
             volume: 0
           });
-          carryPrice = cClose;
         }
+      }
+
+      // 장중에 현재 시각(currentSlotIdx)이 스냅샷 마지막 슬롯(realLimitSlot)보다 앞선 경우,
+      // 빈 수평선(—) 대신 평균 변동폭·거래량 기반의 자연스러운 브릿지 캔들로 연결
+      if (isMarketOpen && currentSlotIdx > realLimitSlot) {
+        bridgePostSnapshotCandles(candles, slotMap, realLimitSlot, currentSlotIdx, realPrice, realPrice, realPrice, item.c);
       }
 
       if (candles.length === 1 && !isMarketOpen) {
@@ -422,7 +525,7 @@ class MarketUniverseEngine {
       const todayHigh = Math.max(todayOpen, realPrice, Number(item.hv || realPrice));
       const todayLow = Math.min(todayOpen, realPrice, Number(item.lv || realPrice));
       openPrice = todayOpen;
-      const todayCandles = createTodayCandles(todayOpen, todayHigh, todayLow, realPrice, totalVol, currentSlotIdx);
+      const todayCandles = createTodayCandles(todayOpen, todayHigh, todayLow, realPrice, totalVol, currentSlotIdx, item.c);
       todayCandles.forEach(c => candles.push(c));
     } else {
       // 3) 장마감/시뮬레이션 모드이거나 외부 CSV 입력 시에만 곡선 생성
@@ -543,6 +646,9 @@ class MarketUniverseEngine {
       openPrice,
       candles,
       _rawM5Map: rawM5Map,
+      _snapshotMaxSlot: snapshotMaxSlot,
+      _hasLiveBridge: false,
+      _lastPolledKrxVol: krxVolume,
       avgCumulativeVol,
       baseVolPower,
       isTodaySession,
@@ -1015,66 +1121,60 @@ class MarketUniverseEngine {
             realHigh > 0 ? realHigh : Math.max(prevPrice, newPrice),
             realLow > 0 ? realLow : Math.min(prevPrice, newPrice),
             newPrice,
-            realVol,
-            currentSlotIdx
+            krxVol > 0 ? krxVol : realVol,
+            currentSlotIdx,
+            stock.code
           );
+          stock._hasLiveBridge = true;
+          stock._lastPolledKrxVol = krxVol;
+        } else if (!stock._hasLiveBridge && stock._snapshotMaxSlot != null && currentSlotIdx > stock._snapshotMaxSlot) {
+          // 스냅샷 로드 후 최초 실시간 시세 수신 시:
+          // 스냅샷의 실제 캔들(0 ~ _snapshotMaxSlot)은 100% 보존하고,
+          // 그 이후 ~ 현재 슬롯까지의 구간을 실시간 현재가(newPrice)에 맞춰 왜곡 없이 자연스럽게 재연결
+          candles.length = stock._snapshotMaxSlot + 1;
+          bridgePostSnapshotCandles(
+            candles,
+            stock._rawM5Map,
+            stock._snapshotMaxSlot,
+            currentSlotIdx,
+            newPrice,
+            realHigh,
+            realLow,
+            stock.code
+          );
+          stock._hasLiveBridge = true;
+          stock._lastPolledKrxVol = krxVol;
         } else if (currentSlotIdx === lastSlotIdx) {
-          // 현재 5분봉 진행 중: 종가, 고가, 저가, 거래량 실시간 갱신
+          // 현재 5분봉 진행 중: 종가, 고가, 저가 및 2초 주기 순증 거래량만 실시간 갱신 (누적 갭 일괄 합산으로 인한 거래량 폭발 원천 차단)
           lastCandle.close = newPrice;
           if (newPrice > lastCandle.high) lastCandle.high = newPrice;
           if (newPrice < lastCandle.low) lastCandle.low = newPrice;
-          const volDiff = realVol - stock.volume;
-          if (volDiff > 0) {
-            lastCandle.volume += volDiff;
-          }
-        } else if (currentSlotIdx > lastSlotIdx && currentSlotIdx <= 78) {
-          // 새 5분봉 슬롯 진입:
-          // 1) 만약 스냅샷의 실제 5분봉(_rawM5Map)에 해당 슬롯 데이터가 있다면 100% 실제 데이터로 주입 (가짜 직선/왜곡 완전 제거)
-          // 2) 스냅샷 이후의 실시간 최신 슬롯에 대해서만 직전 종가와 실시간 체결가를 반영한 실시간 봉 생성
-          const gap = currentSlotIdx - lastSlotIdx;
-          const prevClose = lastCandle.close;
-          let pClose = prevClose;
-          const tick = getTickSize(newPrice);
-          const perSlotVol = Math.max(10, Math.round(Math.max(10, realVol - stock.volume) / gap));
 
-          for (let s = lastSlotIdx + 1; s <= currentSlotIdx; s++) {
-            const isLast = (s === currentSlotIdx);
-            let cCandle = null;
-
-            if (stock._rawM5Map && stock._rawM5Map.has(s)) {
-              // 실제 스냅샷의 5분봉 원본 데이터 우선 복원
-              const raw = stock._rawM5Map.get(s);
-              cCandle = {
-                slotIdx: s,
-                time: raw.time || getSlotTimeLabel(s),
-                open: raw.open,
-                high: isLast ? Math.max(raw.high, newPrice) : raw.high,
-                low: isLast ? Math.min(raw.low, newPrice) : raw.low,
-                close: isLast ? newPrice : raw.close,
-                volume: isLast ? Math.max(raw.volume, perSlotVol) : raw.volume
-              };
-            } else {
-              // 스냅샷 범위를 벗어난 당일 실시간 5분봉 슬롯
-              const cOpen = pClose;
-              const cClose = isLast ? newPrice : pClose;
-              const cHigh = Math.max(cOpen, cClose);
-              const cLow = Math.min(cOpen, cClose);
-              const cVol = isLast ? perSlotVol : 0;
-
-              cCandle = {
-                slotIdx: s,
-                time: getSlotTimeLabel(s),
-                open: cOpen,
-                high: cHigh,
-                low: cLow,
-                close: cClose,
-                volume: cVol
-              };
+          if (stock._hasLiveBridge && stock._lastPolledKrxVol > 0 && krxVol > stock._lastPolledKrxVol) {
+            const tickVolDiff = krxVol - stock._lastPolledKrxVol;
+            let sumVol = 0, cntVol = 0;
+            for (let i = 1; i < len; i++) {
+              if (candles[i].volume > 0) { sumVol += candles[i].volume; cntVol++; }
             }
-
-            candles.push(cCandle);
-            pClose = cCandle.close;
+            const avgCVol = cntVol > 0 ? Math.round(sumVol / cntVol) : 1000;
+            lastCandle.volume = Math.min(Math.round(avgCVol * 2.2), lastCandle.volume + Math.min(tickVolDiff, Math.round(avgCVol * 0.45)));
           }
+          stock._hasLiveBridge = true;
+          stock._lastPolledKrxVol = krxVol;
+        } else if (currentSlotIdx > lastSlotIdx && currentSlotIdx <= 78) {
+          // 새로운 5분봉 슬롯 진입 시: 자연스러운 브릿지 캔들 생성
+          bridgePostSnapshotCandles(
+            candles,
+            stock._rawM5Map,
+            lastSlotIdx,
+            currentSlotIdx,
+            newPrice,
+            realHigh,
+            realLow,
+            stock.code
+          );
+          stock._hasLiveBridge = true;
+          stock._lastPolledKrxVol = krxVol;
         }
       }
 
