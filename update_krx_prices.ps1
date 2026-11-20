@@ -3,8 +3,8 @@ $headers = @{"User-Agent"="Mozilla/5.0"}
 $allStocks = @()
 $seenCodes = New-Object 'System.Collections.Generic.HashSet[string]'
 
-Write-Host "[1/3] KOSPI 실시간 시세 수집 중 (1~10 페이지)..." -ForegroundColor Cyan
-for ($p = 1; $p -le 10; $p++) {
+Write-Host "[1/3] KOSPI 실시간 시세 수집 중 (1~11 페이지)..." -ForegroundColor Cyan
+for ($p = 1; $p -le 11; $p++) {
     $r = Invoke-RestMethod -Uri "https://m.stock.naver.com/api/stocks/marketValue/KOSPI?page=$p&pageSize=100" -Headers $headers
     foreach ($s in $r.stocks) {
         if ($s.stockEndType -eq "stock" -and [int]$s.closePriceRaw -gt 0 -and -not $seenCodes.Contains($s.itemCode)) {
@@ -27,10 +27,12 @@ for ($p = 1; $p -le 10; $p++) {
     }
 }
 
-Write-Host "[2/3] KOSDAQ 실시간 시세 수집 중 (1~8 페이지)..." -ForegroundColor Cyan
-for ($p = 1; $p -le 8; $p++) {
+Write-Host "[2/3] KOSDAQ 실시간 시세 수집 중 (총 1,500종목 도달 시까지)..." -ForegroundColor Cyan
+for ($p = 1; $p -le 12; $p++) {
+    if ($allStocks.Count -ge 1500) { break }
     $r = Invoke-RestMethod -Uri "https://m.stock.naver.com/api/stocks/marketValue/KOSDAQ?page=$p&pageSize=100" -Headers $headers
     foreach ($s in $r.stocks) {
+        if ($allStocks.Count -ge 1500) { break }
         if ($s.stockEndType -eq "stock" -and [int]$s.closePriceRaw -gt 0 -and -not $seenCodes.Contains($s.itemCode)) {
             [void]$seenCodes.Add($s.itemCode)
             $cr = [double]$s.fluctuationsRatio
@@ -102,13 +104,15 @@ for ($i = 0; $i -lt $allStocks.Count; $i++) {
             $candles = Invoke-RestMethod -Uri "https://api.stock.naver.com/chart/domestic/item/$c/minute5" -Headers @{"User-Agent"="Mozilla/5.0"} -TimeoutSec 6
             $arr = @()
             if ($candles -and $candles.Count -gt 0) {
-                # 당일 날짜(가장 마지막 캔들의 앞 8자리 YYYYMMDD)만 필터링하고 15:30 이전 정규장 캔들만 추출
+                # 당일 날짜(가장 마지막 캔들의 앞 8자리 YYYYMMDD) 정규장 09:00~15:30 필터링
                 $latestDate = $candles[$candles.Count - 1].localDateTime.Substring(0, 8)
+                $minHHMM = 900
+                $maxHHMM = 1530
                 foreach ($bar in $candles) {
                     $dt = [string]$bar.localDateTime
                     if ($dt.StartsWith($latestDate)) {
                         $hhmm = $dt.Substring(8, 4)
-                        if ([int]$hhmm -ge 900 -and [int]$hhmm -le 1530) {
+                        if ([int]$hhmm -ge $minHHMM -and [int]$hhmm -le $maxHHMM) {
                             $timeStr = "$($hhmm.Substring(0,2)):$($hhmm.Substring(2,2))"
                             $arr += ,@($timeStr, [int]$bar.openPrice, [int]$bar.highPrice, [int]$bar.lowPrice, [int]$bar.currentPrice, [long]$bar.accumulatedTradingVolume)
                         }

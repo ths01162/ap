@@ -362,23 +362,33 @@
     return filtered;
   }
 
-  // 스파크라인 SVG 생성기
+  // 스파크라인 SVG 생성기 (당일 시가 기준선 + 5분봉 실제 종가 궤적 정밀 렌더링)
   function buildSparklineSvg(prices, isUp) {
-    const w = 52;
-    const h = 20;
-    const min = Math.min(...prices);
-    const max = Math.max(...prices);
-    const span = Math.max(1, max - min);
+    const w = 56;
+    const h = 22;
+    if (!Array.isArray(prices) || prices.length === 0) {
+      return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"></svg>`;
+    }
+    const safePrices = prices.length === 1 ? [prices[0], prices[0]] : prices;
+    const min = Math.min(...safePrices);
+    const max = Math.max(...safePrices);
+    const span = max - min;
+    const denom = Math.max(1, safePrices.length - 1);
 
-    const pts = prices.map((p, i) => {
-      const x = ((i / (prices.length - 1)) * (w - 4) + 2).toFixed(1);
-      const y = (h - 3 - ((p - min) / span) * (h - 6)).toFixed(1);
-      return `${x},${y}`;
+    const yOf = (p) => span <= 0
+      ? (h / 2).toFixed(1)
+      : (h - 3 - ((p - min) / span) * (h - 6)).toFixed(1);
+
+    const pts = safePrices.map((p, i) => {
+      const x = ((i / denom) * (w - 4) + 2).toFixed(1);
+      return `${x},${yOf(p)}`;
     });
 
+    const baseY = yOf(safePrices[0]);
     const stroke = isUp ? '#ff4757' : '#3b82f6';
     return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
-      <polyline fill="none" stroke="${stroke}" stroke-width="1.6" points="${pts.join(' ')}" />
+      <line x1="2" y1="${baseY}" x2="${w - 2}" y2="${baseY}" stroke="rgba(148,163,184,0.28)" stroke-width="0.8" stroke-dasharray="2,2" />
+      <polyline fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" points="${pts.join(' ')}" />
     </svg>`;
   }
 
@@ -579,6 +589,7 @@
     } else {
       el.scannerTableBody.innerHTML = rowsHtml.join('');
     }
+    syncVisibleDashboardSparklines(slice);
   }
 
   // 좌측 섹터별 수급 순위 렌더링
@@ -742,10 +753,131 @@
     }
   }
 
+  // 브라우저에서 네이버 금융 실시간 분봉 JSONP(siseJson.naver)로 직접 1분 체결 데이터를 받아 5분봉 차트 및 중앙 스파크라인을 지연 없이 100% 실시간 동기화
+  const inFlightNaverM5 = new Set();
+  const sparklineSyncQueue = [];
+  let activeSparklineWorkers = 0;
+
+  function pumpSparklineQueue() {
+    while (activeSparklineWorkers < 4 && sparklineSyncQueue.length > 0) {
+      const code = sparklineSyncQueue.shift();
+      const stk = engine.stockMap.get(code);
+      if (!stk || inFlightNaverM5.has(code)) continue;
+      if (stk._liveNaverM5FetchedAt && Date.now() - stk._liveNaverM5FetchedAt < 60000) continue;
+
+      activeSparklineWorkers++;
+      fetchLiveNaver5mCandles(code, () => {
+        activeSparklineWorkers = Math.max(0, activeSparklineWorkers - 1);
+        pumpSparklineQueue();
+      });
+    }
+  }
+
+  function syncVisibleDashboardSparklines(visibleStocks) {
+    const scenarioMode = el.selectMarketScenario ? el.selectMarketScenario.value : 'REAL_SNAPSHOT';
+    if (scenarioMode !== 'REAL_SNAPSHOT' || !Array.isArray(visibleStocks)) return;
+
+    const now = Date.now();
+    const topVisible = visibleStocks.slice(0, 25);
+    for (const s of topVisible) {
+      if (!s || !s.code) continue;
+      if (inFlightNaverM5.has(s.code)) continue;
+      if (s._liveNaverM5FetchedAt && now - s._liveNaverM5FetchedAt < 60000) continue;
+      if (!sparklineSyncQueue.includes(s.code)) {
+        sparklineSyncQueue.push(s.code);
+      }
+    }
+    pumpSparklineQueue();
+  }
+
+  function fetchLiveNaver5mCandles(code, onDone = null) {
+    if (!code || inFlightNaverM5.has(code)) {
+      if (onDone) onDone();
+      return;
+    }
+    const scenarioMode = el.selectMarketScenario ? el.selectMarketScenario.value : 'REAL_SNAPSHOT';
+    if (scenarioMode !== 'REAL_SNAPSHOT') {
+      if (onDone) onDone();
+      return;
+    }
+
+    inFlightNaverM5.add(code);
+    let todayStr = '';
+    try {
+      const kst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+      const yyyy = kst.getFullYear();
+      const mm = String(kst.getMonth() + 1).padStart(2, '0');
+      const dd = String(kst.getDate()).padStart(2, '0');
+      todayStr = `${yyyy}${mm}${dd}`;
+    } catch (_) {
+      const now = new Date();
+      todayStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+    }
+
+    const cbName = `__naverM5Cb_${code}_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const script = document.createElement('script');
+    let settled = false;
+
+    const cleanup = () => {
+      inFlightNaverM5.delete(code);
+      try { delete window[cbName]; } catch (_) { window[cbName] = undefined; }
+      if (script.parentNode) script.parentNode.removeChild(script);
+      if (onDone) onDone();
+    };
+
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+    }, 5000);
+
+    window[cbName] = function (rows) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      if (Array.isArray(rows) && rows.length > 1 && typeof engine.applyLiveMinuteRowsToStock === 'function') {
+        const updated = engine.applyLiveMinuteRowsToStock(code, rows);
+        if (updated) {
+          const stk = engine.stockMap.get(code);
+          // 중앙 대시보드 테이블의 해당 종목 '5분봉 흐름' 스파크라인 셀 즉시 갱신
+          if (stk && el.scannerTableBody) {
+            const tr = el.scannerTableBody.querySelector(`tr[data-code="${code}"]`);
+            if (tr) {
+              const sparkTd = tr.querySelector('.col-spark');
+              if (sparkTd) {
+                sparkTd.innerHTML = buildSparklineSvg(stk.sparkline, stk.changePct >= 0);
+              }
+            }
+          }
+          if (state.selectedCode === code) {
+            renderStockDetail(true);
+          }
+        }
+      }
+      cleanup();
+    };
+
+    script.onerror = function () {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      cleanup();
+    };
+
+    script.referrerPolicy = 'no-referrer';
+    script.src = `https://api.finance.naver.com/siseJson.naver?symbol=${code}&requestType=1&startTime=${todayStr}&endTime=${todayStr}&timeframe=minute&_callback=${cbName}`;
+    document.head.appendChild(script);
+  }
+
   // 우측 선택 종목 상세 정보 및 캔버스 차트 렌더링
-  function renderStockDetail() {
+  function renderStockDetail(skipLiveM5Fetch = false) {
     const stock = engine.stockMap.get(state.selectedCode) || engine.stocks[0];
     if (!stock) return;
+
+    // 선택된 종목의 실시간 5분봉을 네이버 금융 JSONP에서 30초 주기로 직접 동기화 (GitHub Actions 지연 완전 해소)
+    if (!skipLiveM5Fetch && (!stock._liveNaverM5FetchedAt || Date.now() - stock._liveNaverM5FetchedAt >= 30000)) {
+      fetchLiveNaver5mCandles(stock.code);
+    }
 
     el.detailMarketBadge.textContent = stock.market;
     if (el.detailNxtBadge) {
@@ -1013,9 +1145,10 @@
 
     if (el.btnToggleChartZoom) {
       if (isMarketOpen && lastSlot < 72) {
+        const schedRange = typeof getKrxMarketSchedule === 'function' ? getKrxMarketSchedule().rangeLabel : '09:00~15:30';
         el.btnToggleChartZoom.style.display = 'inline-flex';
         el.btnToggleChartZoom.textContent = isZoomMode ? '🔍 세션확대' : '📊 전체79봉';
-        el.btnToggleChartZoom.title = isZoomMode ? '클릭 시 전체 79봉(09:00~15:30) 뷰로 전환' : '클릭 시 현재 진행 세션 확대 뷰로 전환';
+        el.btnToggleChartZoom.title = isZoomMode ? `클릭 시 전체 79봉(${schedRange}) 뷰로 전환` : '클릭 시 현재 진행 세션 확대 뷰로 전환';
         el.btnToggleChartZoom.classList.toggle('is-full', !isZoomMode);
       } else {
         el.btnToggleChartZoom.style.display = 'none';
@@ -1170,11 +1303,11 @@
       }
     } else {
       timeTicks = [
-        [0, '09:00'],
-        [18, '10:30'],
-        [36, '12:00'],
-        [54, '13:30'],
-        [78, '15:30']
+        [0, getSlotTimeLabel(0)],
+        [18, getSlotTimeLabel(18)],
+        [36, getSlotTimeLabel(36)],
+        [54, getSlotTimeLabel(54)],
+        [78, getSlotTimeLabel(78)]
       ];
     }
     for (const [slotIdx, label] of timeTicks) {
@@ -1420,9 +1553,12 @@
     }
   }
 
-  // 장 운영 상태(정규장 09:00~15:30 vs 장마감) 및 UI 뱃지/깜빡임 상태 갱신
+  // 장 운영 상태(정규장 평일 09:00~15:30 / 2026-11-19 수능일 10:00~16:30 vs 장마감) 및 UI 뱃지/깜빡임 상태 갱신
   function updateMarketStatusUI() {
     const isMarketOpen = typeof isRegularMarketHoursNow === 'function' ? isRegularMarketHoursNow() : true;
+    const sched = typeof getKrxMarketSchedule === 'function' ? getKrxMarketSchedule() : { isCsatDay: false, rangeLabel: '09:00 ~ 15:30', startMins: 540, kst: new Date() };
+    const totalMins = sched.kst.getHours() * 60 + sched.kst.getMinutes();
+    const isPreMarketCsat = sched.isCsatDay && totalMins < sched.startMins;
     const scenarioMode = el.selectMarketScenario ? el.selectMarketScenario.value : 'REAL_SNAPSHOT';
 
     if (scenarioMode === 'REAL_SNAPSHOT') {
@@ -1434,10 +1570,12 @@
           el.btnToggleLive.classList.add('closed');
         }
         if (el.liveStatusText) {
-          el.liveStatusText.textContent = '정규장 마감 (종가 확정)';
+          el.liveStatusText.textContent = isPreMarketCsat ? '수능일 10:00 개장 대기' : '정규장 마감 (종가 확정)';
         }
         if (el.brandSnapshotSubtitle && !el.brandSnapshotSubtitle.textContent.includes('마감')) {
-          el.brandSnapshotSubtitle.textContent = 'KRX 정규장 마감 · 최종 종가 확정 완료';
+          el.brandSnapshotSubtitle.textContent = isPreMarketCsat
+            ? 'KRX 수능일 특별장 (10:00 ~ 16:30) 개장 대기 · 전일 종가 기준'
+            : 'KRX 정규장 마감 · 최종 종가 확정 완료';
         }
         if (el.marketClosedBanner) {
           el.marketClosedBanner.style.display = 'flex';
@@ -1466,7 +1604,9 @@
           el.btnToggleLive.classList.toggle('active', state.isLive);
         }
         if (el.liveStatusText) {
-          el.liveStatusText.textContent = state.isLive ? 'KRX 실시간 연동중' : '실시간 일시정지';
+          el.liveStatusText.textContent = state.isLive
+            ? (sched.isCsatDay ? 'KRX 실시간 (수능 10:00~16:30)' : 'KRX 실시간 연동중')
+            : '실시간 일시정지';
         }
         if (el.marketClosedBanner) {
           el.marketClosedBanner.style.display = 'none';
@@ -1526,13 +1666,15 @@
           pollLiveKrxPrices(false);
         }
         // 장마감 시에는 화면 깜빡임을 유발하는 2초 고속 폴링을 멈추고,
-        // 익일 개장(09:00) 전환 여부만 30초 주기로 가볍게 체크
+        // 개장(평일 09:00 / 수능일 10:00) 전환 여부를 15초 주기로 체크하여 개장 즉시 실시간 모드로 전환
         state.timerId = setInterval(() => {
           if (typeof isRegularMarketHoursNow === 'function' && isRegularMarketHoursNow()) {
             state.hasSyncedClosingSnapshot = false;
+            engine.initUniverse('REAL_SNAPSHOT');
+            refreshAllViews(true);
             startRealtimeSimulation();
           }
-        }, 30000);
+        }, 15000);
         return;
       }
 
@@ -2391,12 +2533,16 @@
 
   // 초기 구동
   const isMarketOpenNow = typeof isRegularMarketHoursNow === 'function' ? isRegularMarketHoursNow() : true;
+  const initSched = typeof getKrxMarketSchedule === 'function' ? getKrxMarketSchedule() : { isCsatDay: false, rangeLabel: '09:00 ~ 15:30', startMins: 540, kst: new Date() };
+  const initTotalMins = initSched.kst.getHours() * 60 + initSched.kst.getMinutes();
   updateMarketStatusUI();
   if (el.brandSnapshotSubtitle) {
     if (!isMarketOpenNow) {
-      el.brandSnapshotSubtitle.textContent = `KRX 정규장 마감 · 최종 종가 확정 (${window.REAL_KRX_SNAPSHOT_TIME || '마감'} 기준)`;
+      el.brandSnapshotSubtitle.textContent = (initSched.isCsatDay && initTotalMins < initSched.startMins)
+        ? `KRX 수능일 특별장 (10:00 ~ 16:30) 개장 대기 · 전일 종가 기준`
+        : `KRX 정규장 마감 · 최종 종가 확정 (${window.REAL_KRX_SNAPSHOT_TIME || '마감'} 기준)`;
     } else {
-      el.brandSnapshotSubtitle.textContent = `KRX 정규장 실시간 연동중 (09:00 ~ 15:30)`;
+      el.brandSnapshotSubtitle.textContent = `KRX 정규장 실시간 연동중 (${initSched.rangeLabel})`;
     }
   }
   populateSectorOptions();
